@@ -42,10 +42,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 环境自检
+      - name: 准备模型 (优先本机缓存, 避免网络依赖)
         run: |
-          python --version
-          pip install --quiet -r requirements.txt
-          python download_models.py
-          python ci/run_tests.py
+          $cache = 'C:\Users\zbj\ZCodeProject\silero-vad-test\models'
+          if (Test-Path $cache) {
+            New-Item -ItemType Directory -Force models | Out-Null
+            Copy-Item "$cache\*.onnx" models\ -Force
+            echo "已从本机缓存复制模型"
+          } else { python download_models.py }
+        shell: pwsh
+
+      - name: 基准回归测试
+        run: python ci/run_tests.py
         shell: pwsh
