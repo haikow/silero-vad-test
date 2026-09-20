@@ -17,6 +17,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import numpy as np
 import sounddevice as sd
+import soundfile as sf
 import websockets
 
 from test_vad import MODELS, SAMPLE_RATE, WINDOW, VadRunner
@@ -24,6 +25,7 @@ from test_vad import MODELS, SAMPLE_RATE, WINDOW, VadRunner
 HTTP_PORT, WS_PORT = 8766, 8767
 N_BARS = 56          # 前端波形条数量
 ENV_POINTS = 56      # 每窗送的包络点数
+DEBUG_WINDOWS = 400  # /debug 保留的最近窗数 (~13 秒)
 
 HTML = r"""<!DOCTYPE html>
 <html lang="zh">
@@ -169,23 +171,57 @@ requestAnimationFrame(loop);
 def make_stream(gate: str):
     runners = {k: VadRunner(p) for k, p in MODELS.items()}
     state = {"p5": 0.0, "p4": 0.0, "wave": [0.02] * ENV_POINTS,
-             "has": False, "err": "", "count": 0}
+             "has": False, "err": "", "count": 0, "resets": 0,
+             "frames": {}}
     lock = threading.Lock()
+    quiet = 0           # v5 连续静音窗计数
+    ring = []           # 最近 DEBUG_WINDOWS 窗原始数据, 供 /debug 导出
+    frames_seen = {}    # 回调实际收到的样本数分布 (排查 blocksize 问题)
+    agc = {"gain": 1.0}  # 自动增益状态
 
     def callback(indata, frames, time_info, status):
+        nonlocal quiet
         try:
+            n_raw = len(indata)
+            frames_seen[n_raw] = frames_seen.get(n_raw, 0) + 1
             x = indata[:, 0].astype(np.float32)
             if len(x) != WINDOW:  # 48k 回调则 3:1 降采样到 16k
                 x = x.reshape(WINDOW, len(x) // WINDOW).mean(axis=1)
-            seg = max(1, len(x) // ENV_POINTS)
-            env = np.abs(x[:seg * ENV_POINTS].reshape(ENV_POINTS, seg)).max(axis=1)
-            p = {}
+            # AGC: v5/uint8 对低电平语音响应差。用对电平鲁棒的 v4 判定语音,
+            # 只在语音期间校准增益 (目标 RMS ~0.06, 上限 8x), 噪声期增益冻结
+            p4_raw = None
             for name, runner in runners.items():
-                key = "p5" if "uint8" in name else "p4"
-                p[key] = round(float(runner.process(x)), 4)
+                if "int8" in name:
+                    p4_raw = runner.process(x)
+            rms_in = float(np.sqrt(np.mean(x ** 2)))
+            if p4_raw is not None and p4_raw > 0.3:
+                target_gain = min(8.0, max(1.0, 0.06 / max(rms_in, 1e-4)))
+                agc["gain"] += 0.05 * (target_gain - agc["gain"])
+            xg = np.clip(x * agc["gain"], -1.0, 1.0).astype(np.float32)
+            seg = max(1, len(x) // ENV_POINTS)
+            env = np.abs(xg[:seg * ENV_POINTS].reshape(ENV_POINTS, seg)).max(axis=1)
+            p = {"p4": round(float(p4_raw), 4)}
+            for name, runner in runners.items():
+                if "uint8" in name:
+                    p["p5"] = round(float(runner.process(xg)), 4)
+            # v5 已知特性: 长时间环境音/静音后 LSTM 状态漂移变迟钝,
+            # 连续 3s 低概率即复位状态 (官方流式用法也建议定期 reset)
+            quiet = quiet + 1 if max(p["p5"], p["p4"]) < 0.15 else 0
+            if quiet >= int(3 * SAMPLE_RATE / WINDOW):
+                for r in runners.values():
+                    r.reset()
+                quiet = 0
+                with lock:
+                    state["resets"] += 1
             with lock:
                 state.update(p, wave=[round(float(v), 4) for v in env],
-                             has=True, count=state["count"] + 1)
+                             has=True, count=state["count"] + 1,
+                             frames=dict(frames_seen), gain=round(agc["gain"], 2))
+                ring.append((float(np.sqrt(np.mean(xg ** 2))),
+                             p["p5"], p["p4"], xg.copy(),
+                             hash(xg.tobytes())))
+                if len(ring) > DEBUG_WINDOWS:
+                    ring.pop(0)
         except Exception as e:  # 异常必须可见, 不能静默吞掉
             with lock:
                 state["err"] = repr(e)
@@ -197,7 +233,7 @@ def make_stream(gate: str):
             stream = sd.InputStream(samplerate=sr, channels=1, dtype="float32",
                                     blocksize=block, callback=callback)
             stream.start()
-            return stream, state, lock, sr
+            return stream, state, lock, ring, sr
         except sd.PortAudioError as e:
             print(f"采样率 {sr} 打开失败: {e}")
     raise SystemExit("没有可用的麦克风输入设备")
@@ -221,15 +257,42 @@ async def ws_serve(state, lock, gate):
 
 
 class PageHandler(BaseHTTPRequestHandler):
+    ring = None   # 由 main 注入
+    lock = None
+    state = None
+
     def do_GET(self):
-        if self.path != "/":
+        if self.path == "/":
+            body = (HTML.replace("__GATE__", PageHandler.gate)
+                        .replace("__WSPORT__", str(WS_PORT))
+                        .encode("utf-8"))
+            ctype = "text/html; charset=utf-8"
+        elif self.path.startswith("/debug") and self.ring is not None:
+            with self.lock:  # 快照, 避免与音频回调竞争
+                snap = list(self.ring)
+                frames = dict(self.state.get("frames", {})) if self.state else {}
+            if self.path == "/debug":
+                body = json.dumps({
+                    "windows": len(snap),
+                    "callback_frames_histogram": frames,
+                    "resets": self.state.get("resets", 0) if self.state else 0,
+                    "per_window": [[round(r, 5), p5, p4, h]
+                                   for r, p5, p4, _, h in snap],
+                }).encode("utf-8")
+                ctype = "application/json; charset=utf-8"
+            else:  # /debug.wav
+                import io
+                audio = np.concatenate([s[3] for s in snap]) \
+                    if snap else np.zeros(0, dtype=np.float32)
+                buf = io.BytesIO()
+                sf.write(buf, audio, SAMPLE_RATE, format="WAV", subtype="PCM_16")
+                body = buf.getvalue()
+                ctype = "audio/wav"
+        else:
             self.send_error(404)
             return
-        body = (HTML.replace("__GATE__", PageHandler.gate)
-                    .replace("__WSPORT__", str(WS_PORT))
-                    .encode("utf-8"))
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -246,8 +309,11 @@ def main():
     a = ap.parse_args()
     PageHandler.gate = a.gate
 
-    stream, state, lock, sr = make_stream(a.gate)
+    stream, state, lock, ring, sr = make_stream(a.gate)
     print(f"麦克风已启动 (采样率 {sr}), 门控模型: {a.gate}, Ctrl+C 退出")
+    PageHandler.ring = ring
+    PageHandler.lock = lock
+    PageHandler.state = state
 
     httpd = HTTPServer(("127.0.0.1", HTTP_PORT), PageHandler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
