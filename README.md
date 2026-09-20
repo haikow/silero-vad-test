@@ -37,6 +37,18 @@ v5/v4 两条人声概率曲线、红色阈值线、绿色检出区间高亮；**
 位置跳转到该时刻播放**，播放时黄色游标跟随——哪里有人声一看一听便知。
 长音频默认截取前 300 秒（`--max-seconds` 可调）。
 
+## 实时演示 (Siri 风格)
+
+```bash
+pip install sounddevice websockets
+python vad_realtime.py            # 自动打开浏览器, 需要麦克风
+python vad_realtime.py --gate v4  # 波形门控改用 v4/int8 概率
+```
+
+对着麦克风说话时波形像 Siri 一样跳动，嘈杂声音（非人声）时波形静止；
+两个模型的实时概率条 + 最近 12 秒概率历史同步显示。波形幅度由 VAD 概率门控
+（<0.3 关闭、>0.6 全开、快开慢关），声音与图形同步跳动。
+
 模型和测试音频不入库：模型用 `download_models.py` 拉取；`test_vad.py` 的测试音频首次运行时自动生成（需要 Windows TTS，非 Windows 平台可自行替换 `audio/speech_raw.wav`）。
 
 > 许可证提示：代码部分可自由使用；两个模型的版权归 snakers4/silero-vad 项目（其许可证对商用有限制，商用前请查阅原仓库 LICENSE）。
