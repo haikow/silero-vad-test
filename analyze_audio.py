@@ -20,19 +20,40 @@ from test_vad import (MODELS, SAMPLE_RATE, THRESHOLD, WINDOW,
 STEP_SEC = 0.5  # 时间线每格时长
 
 
-def load_audio(path: str) -> np.ndarray:
-    """任意音频 -> float32 mono 16kHz; wav 直读, mp3 用 miniaudio, 其余走 ffmpeg"""
+def load_audio(path: str, max_seconds: float = 300.0) -> np.ndarray:
+    """任意音频 -> float32 mono 16kHz; wav 直读, mp3 用 miniaudio, 其余用 PyAV/ffmpeg"""
     ext = os.path.splitext(path)[1].lower()
     if ext == ".wav":
         audio, sr = sf.read(path, dtype="float32", always_2d=True)
         audio = audio.mean(axis=1)
-        return audio if sr == SAMPLE_RATE else _resample(audio, sr)
-    if ext == ".mp3":
+        audio = audio if sr == SAMPLE_RATE else _resample(audio, sr)
+    elif ext == ".mp3":
         import miniaudio
         dec = miniaudio.decode_file(path, nchannels=1, sample_rate=SAMPLE_RATE,
                                     output_format=miniaudio.SampleFormat.FLOAT32)
-        return np.array(dec.samples, dtype=np.float32)
-    ffmpeg = _find_ffmpeg()
+        audio = np.array(dec.samples, dtype=np.float32)
+    else:
+        audio = _decode_ffmpeg(path)
+    limit = int(max_seconds * SAMPLE_RATE)
+    if len(audio) > limit:
+        print(f"[音频共 {len(audio)/SAMPLE_RATE/60:.1f} 分钟, 截取前 {max_seconds:.0f}s 分析]")
+        audio = audio[:limit]
+    return audio
+
+
+def _decode_ffmpeg(path: str) -> np.ndarray:
+    try:  # 优先 PyAV (pip install av), 自带 ffmpeg 库无需外部程序
+        import av
+        rs = av.AudioResampler(format="fltp", layout="mono", rate=SAMPLE_RATE)
+        chunks = []
+        with av.open(path) as c:
+            for frame in c.decode(audio=0):
+                for f in rs.resample(frame):
+                    chunks.append(f.to_ndarray().reshape(-1))
+        return np.concatenate(chunks).astype(np.float32)
+    except ImportError:
+        pass
+    ffmpeg = _find_ffmpeg()  # 兜底: 外部 ffmpeg 转 wav
     with tempfile.TemporaryDirectory() as td:
         tmp_wav = os.path.join(td, "tmp_16k.wav")
         cmd = [ffmpeg, "-y", "-i", path, "-ac", "1", "-ar", str(SAMPLE_RATE),
@@ -91,12 +112,13 @@ def analyze(path: str):
         segs_str = ", ".join(f"[{a:.2f},{b:.2f}]" for a, b in segs[:30])
         print(f"语音区间: {segs_str}{' ...' if len(segs) > 30 else ''}")
 
-        print("概率时间线 (每格 0.5s):")
-        step = int(STEP_SEC * SAMPLE_RATE / WINDOW)
+        print("概率时间线:")
+        step_sec = STEP_SEC if dur <= 120 else 5.0  # 长音频自动放粗粒度
+        step = int(step_sec * SAMPLE_RATE / WINDOW)
         for j in range(0, len(probs), step):
             p = probs[j:j + step].mean()
             bar = "#" * int(p * 40)
-            print(f"  {times[j]:6.2f}s {p:.3f} |{bar:<40}|")
+            print(f"  {times[j]:7.2f}s {p:.3f} |{bar:<40}|")
 
 
 if __name__ == "__main__":
