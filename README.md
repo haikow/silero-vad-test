@@ -157,3 +157,12 @@ self-hosted job 已跨平台 (Windows/Mac 通用, 步骤统一用 bash; Windows 
 - **优先以 sherpa 的 int8 (v4) 为蓝本**：体积最小（208 KB）、无控制流、LSTM 状态 64 维（v5 是 128 维，内存减半）、结构版本老且公开资料多（社区有多个 silero-vad v4 的纯 C 移植先例可参考）。
 - 两个模型里的量化算子（`DynamicQuantizeLinear`/`ConvInteger`/`DynamicQuantizeLSTM`）都是为 ONNX Runtime CPU 执行设计的，芯片 SDK 大概率不认识：常见做法是**反量化回 float 权重，交给芯片工具链按 int16/int8 重新量化**，精度基本无损（本模型量很轻）。
 - 验证方法：把 PC 上 `test_mixed_16k.wav` 的逐窗概率存成基准（可在 test_vad.py 里把 probs 数组 np.save 导出），芯片上跑同样输入逐窗比对，偏差应 <0.1，以此确认移植正确。
+
+## XNNC 编译环境(已就绪, 2026-09-20)
+
+`porting/` 目录包含 WQ7036AC(HiFi5 DSP + Neo NPU)的 **XNNC/Cadence NeuroWeave SDK 3.2.2**
+编译环境:Dockerfile(Apple Silicon Mac 经 Colima+Rosetta 跑 x86-64,亦适用任意 x86 Linux)、
+一键进入脚本、Silero v4 float 的编译配置(流式多输入 + 自动量化 + Neo NPU 卸载)、
+校准集生成脚本与踩坑记录。环境与 PC 基准已在同容器内联合验证(相关系数 1.00000)。
+**唯一待补**:物奇 SDK 的 Xtensa 核配置(`xtensa_system`),拿到后即可跑通量化→codegen 全流程。
+详见 [porting/README.md](porting/README.md)。

@@ -1,0 +1,8 @@
+# Cadence 授权件, 禁止入库; 由 XNNC_3.2.2_Linux.tar.gz 解压得到
+/XNNC/
+
+# XNNC 运行产物与模型/数据集(本地生成)
+/silero/model/
+/silero/dataset/
+/silero/output/
+/silero/temp/
