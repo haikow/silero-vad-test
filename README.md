@@ -72,6 +72,42 @@ python vad_realtime.py --gate v4  # 波形门控改用 v4/int8 概率
 起始阈值高 (0.6) + 结束阈值低 (0.35, 迟滞) + 最短语音时长 (0.5s) + 最短静音时长 (0.25s)。
 实测 B 站咖啡馆嘈杂素材: v5 裸阈值 25.5% 误触发 -> 加四件套后 13%。
 
+## 自动化测试平台 (CI)
+
+push / PR 自动触发两个 job (均已验证跑通):
+
+| Job | 运行位置 | 内容 |
+|---|---|---|
+| 算法基准回归 | GitHub 云端 (ubuntu) | 下载模型 -> 对 `test_fixtures/smoke_test.wav` 跑两个模型 -> 与 `baseline_probs.json` 逐窗比对 (容差 0.05, 相关系数>=0.995) |
+| 本地 CI 机冒烟 | self-hosted runner (本地 Windows) | 同样的基准回归, 验证本地 runner 链路; 模型优先从本机缓存复制 |
+| 固件在环 (HIL) | self-hosted, 手动触发 | **固件到位后启用**: 烧录 -> 下发测试音频 -> 串口回收逐窗概率 -> 与 PC 基准比对 (偏差<=0.1) |
+
+```bash
+# 基准回归 (本地手动跑)
+python ci/run_tests.py                     # 回归模式, 超限 exit 1
+python ci/run_tests.py --update-baseline   # 模型/素材预期变更后重新生成基准并提交
+
+# 固件在环联调 (无硬件时验证比对逻辑)
+python ci/firmware_test.py --mock
+python ci/firmware_test.py --port COM7     # 固件协议在 ci/firmware_test.py 的 talk_to_firmware() 中实现
+```
+
+### 本地 CI 机 (self-hosted runner) 说明
+
+- runner 安装在 `C:\actions-runner`, 名称 `ci-local`, 标签 `vad-lab`, 当前以当前用户隐藏进程运行
+- 开机自启 (可选, 需管理员 PowerShell):
+  `schtasks /create /tn GitHubRunner /tr C:\actions-runner\run.cmd /sc onstart /ru system /f`
+  注意 SYSTEM 账户无用户级 Python, 届时 workflow 中需改用绝对 Python 路径
+- self-hosted job 的模型缓存路径硬编码为 `C:\Users\zbj\ZCodeProject\silero-vad-test\models`, 换机器时同步修改 `ci.yml`
+- `download_models.py` 已带国内镜像 fallback (hf-mirror / ghproxy), 断流网络下建议先手动跑一次预热缓存
+
+### 固件到位后的接入步骤
+
+1. 与固件同事约定串口协议 (逐窗发 512 样本 int16, 返回概率), 填入 `ci/firmware_test.py` 的 `talk_to_firmware()`
+2. 在 `.github/workflows/firmware.yml` 填入 SDK 烧录命令 (UART0 = GPIO01/GPIO02)
+3. 开发板接 CI 机的串口, GitHub 页面手动触发 "固件在环测试" workflow
+4. 验收标准已内置: 固件概率 vs PC 基准逐窗偏差 <= 0.1, 相关系数 >= 0.98
+
 模型和测试音频不入库：模型用 `download_models.py` 拉取；`test_vad.py` 的测试音频首次运行时自动生成（需要 Windows TTS，非 Windows 平台可自行替换 `audio/speech_raw.wav`）。
 
 > 许可证提示：代码部分可自由使用；两个模型的版权归 snakers4/silero-vad 项目（其许可证对商用有限制，商用前请查阅原仓库 LICENSE）。
