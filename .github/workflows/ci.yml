@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  algo-regression:
+    name: 算法基准回归 (云端)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖
+        run: |
+          pip install onnxruntime numpy soundfile
+
+      - name: 下载量化模型
+        run: python download_models.py
+
+      - name: 基准回归测试
+        run: python ci/run_tests.py
+
+      - name: 上传基准文件 (排查用)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: baseline-reports
+          path: test_fixtures/
+          retention-days: 7
+
+  self-hosted-smoke:
+    name: 本地 CI 机冒烟 (self-hosted)
+    # 验证本地 runner 与模型链路; 固件在环测试在 firmware.yml
+    runs-on: [self-hosted, vad-lab]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 环境自检
+        run: |
+          python --version
+          python -c "import onnxruntime" 2>/dev/null || pip install onnxruntime numpy soundfile
+          python download_models.py
+          python ci/run_tests.py
+        shell: pwsh

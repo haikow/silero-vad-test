@@ -1,0 +1,45 @@
+name: 固件在环测试 (HIL)
+
+# 固件/SDK 到位后启用: 本地 CI 机连接 WQ7036AC 开发板
+# 流程: 烧录固件 -> 下发测试音频 -> 串口回收逐窗概率 -> 与 PC 基准比对
+on:
+  workflow_dispatch:
+    inputs:
+      firmware_artifact:
+        description: "固件文件路径 (相对仓库或绝对路径)"
+        required: false
+        default: ""
+      serial_port:
+        description: "开发板串口 (如 COM7)"
+        required: false
+        default: ""
+
+jobs:
+  hil:
+    runs-on: [self-hosted, vad-lab]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 烧录固件
+        run: |
+          echo "TODO: SDK 到位后填入烧录命令"
+          echo "  数据手册: UART0 (GPIO01/GPIO02) 为默认固件下载口"
+          echo "  示例: <SDK工具链> flash --port ${{ inputs.serial_port }} ${{ inputs.firmware_artifact }}"
+        shell: pwsh
+
+      - name: 固件 VAD 比对测试
+        run: |
+          pip install pyserial 2>$null
+          python ci/firmware_test.py --port "${{ inputs.serial_port }}"
+        shell: pwsh
+
+      - name: 上传测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hil-report
+          path: |
+            test_fixtures/
+            hil_result.json
+          if-no-files-found: ignore
+          retention-days: 30
