@@ -128,9 +128,13 @@ function loop() {
   document.getElementById('f5').style.width = ((cur.p5||0)*100) + '%';
   document.getElementById('f4').style.width = ((cur.p4||0)*100) + '%';
   const on = (cur[GATE] ?? 0) >= 0.5;
+  const st = document.getElementById('st');
   document.getElementById('dot').className = 'dot' + (on ? ' on' : '');
-  document.getElementById('st').textContent =
-    !cur.has ? '等待音频…' : on ? '检测到人声' : '环境音 (未触发)';
+  if (cur.err) { st.textContent = '错误: ' + cur.err; st.style.color = '#f87171'; }
+  else if (!cur.has) { st.textContent = '等待音频… (检查麦克风是否被占用/禁用)';
+                       st.style.color = '#94a3b8'; }
+  else { st.textContent = on ? '检测到人声' : '环境音 (未触发)';
+         st.style.color = ''; }
   // ---- 历史曲线 (12s) ----
   if (cur.has) { hist5.push(cur.p5||0); hist4.push(cur.p4||0);
                  if (hist5.length > 380) { hist5.shift(); hist4.shift(); } }
@@ -165,25 +169,29 @@ requestAnimationFrame(loop);
 def make_stream(gate: str):
     runners = {k: VadRunner(p) for k, p in MODELS.items()}
     state = {"p5": 0.0, "p4": 0.0, "wave": [0.02] * ENV_POINTS,
-             "has": False, "json": None}
+             "has": False, "err": "", "count": 0}
     lock = threading.Lock()
 
     def callback(indata, frames, time_info, status):
-        x = indata[:, 0].astype(np.float32)
         try:
-            seg = WINDOW // ENV_POINTS
-            env = np.abs(x.reshape(ENV_POINTS, seg)).max(axis=1)
+            x = indata[:, 0].astype(np.float32)
+            if len(x) != WINDOW:  # 48k 回调则 3:1 降采样到 16k
+                x = x.reshape(WINDOW, len(x) // WINDOW).mean(axis=1)
+            seg = max(1, len(x) // ENV_POINTS)
+            env = np.abs(x[:seg * ENV_POINTS].reshape(ENV_POINTS, seg)).max(axis=1)
             p = {}
             for name, runner in runners.items():
                 key = "p5" if "uint8" in name else "p4"
                 p[key] = round(float(runner.process(x)), 4)
             with lock:
                 state.update(p, wave=[round(float(v), 4) for v in env],
-                             has=True)
-        except Exception:  # 推理异常不能打断音频流
-            pass
+                             has=True, count=state["count"] + 1)
+        except Exception as e:  # 异常必须可见, 不能静默吞掉
+            with lock:
+                state["err"] = repr(e)
+            print(f"音频回调异常: {e!r}")
 
-    # 优先 16k 直采; 设备不支持则 48k + 整数倍降采样
+    # 优先 16k 直采; 设备不支持则 48k + 回调内 3:1 降采样
     for sr, block in ((SAMPLE_RATE, WINDOW), (48000, WINDOW * 3)):
         try:
             stream = sd.InputStream(samplerate=sr, channels=1, dtype="float32",
