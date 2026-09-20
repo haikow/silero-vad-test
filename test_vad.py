@@ -6,21 +6,24 @@ Silero VAD 量化模型对比测试（uint8 vs int8）
 - 输出: 噪声段/语音段概率、语音起止区间、每窗耗时、实时率(RTF)
 """
 import time
+from pathlib import Path
+
 import numpy as np
 import soundfile as sf
 import onnxruntime as ort
+
+BASE = Path(__file__).resolve().parent
+MODELS = {
+    "uint8 (onnx-community, 639KB)": str(BASE / "models" / "silero_vad_uint8.onnx"),
+    "int8  (sherpa-onnx, 208KB)":    str(BASE / "models" / "silero_vad_int8.onnx"),
+}
 
 SAMPLE_RATE = 16000
 WINDOW = 512  # 32ms @ 16kHz
 THRESHOLD = 0.5
 
-BASE = r"C:\Users\zbj\ZCodeProject\silero-vad-test"
-RAW_WAV = BASE + r"\audio\speech_raw.wav"
-MIX_WAV = BASE + r"\audio\test_mixed_16k.wav"
-MODELS = {
-    "uint8 (onnx-community, 639KB)": BASE + r"\models\silero_vad_uint8.onnx",
-    "int8  (sherpa-onnx, 208KB)":    BASE + r"\models\silero_vad_int8.onnx",
-}
+RAW_WAV = str(BASE / "audio" / "speech_raw.wav")
+MIX_WAV = str(BASE / "audio" / "test_mixed_16k.wav")
 
 
 def resample_linear(x, sr_from, sr_to):
