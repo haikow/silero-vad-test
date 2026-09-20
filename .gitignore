@@ -3,4 +3,4 @@ models/*.onnx
 audio/
 __pycache__/
 *.pyc
-rt_debug.json
+rt_debug*.json
