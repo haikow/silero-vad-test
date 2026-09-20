@@ -27,9 +27,15 @@ python test_vad.py                        # 合成基准: 白噪声+TTS语音+�
 分析任意真实音频（mp3/m4a/ogg/wav，自动转 16 kHz）：
 
 ```bash
-pip install miniaudio                     # mp3 解码; m4a 等格式另需 ffmpeg 或 imageio-ffmpeg
-python analyze_audio.py 路径/xxx.mp3
+pip install miniaudio                     # mp3 解码; m4a 等格式另需 av (PyAV)
+python analyze_audio.py 路径/xxx.mp3      # 命令行版: 时间线 + 统计
+python vad_gui.py 路径/xxx.mp3            # GUI 版: 浏览器里看曲线, 点击跳转播放
 ```
+
+`vad_gui.py` 生成单文件 HTML（音频以 base64 内嵌，完全离线）：上方音频波形、下方
+v5/v4 两条人声概率曲线、红色阈值线、绿色检出区间高亮；**悬停看逐点概率，点击任意
+位置跳转到该时刻播放**，播放时黄色游标跟随——哪里有人声一看一听便知。
+长音频默认截取前 300 秒（`--max-seconds` 可调）。
 
 模型和测试音频不入库：模型用 `download_models.py` 拉取；`test_vad.py` 的测试音频首次运行时自动生成（需要 Windows TTS，非 Windows 平台可自行替换 `audio/speech_raw.wav`）。
 
