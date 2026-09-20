@@ -1,0 +1,5 @@
+# 模型与音频是本地生成/下载的产物, 不入库, 用 download_models.py 拉取
+models/*.onnx
+audio/
+__pycache__/
+*.pyc
