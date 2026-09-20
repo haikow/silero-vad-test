@@ -25,13 +25,13 @@ jobs:
           echo "TODO: SDK 到位后填入烧录命令"
           echo "  数据手册: UART0 (GPIO01/GPIO02) 为默认固件下载口"
           echo "  示例: <SDK工具链> flash --port ${{ inputs.serial_port }} ${{ inputs.firmware_artifact }}"
-        shell: pwsh
+        shell: bash
 
       - name: 固件 VAD 比对测试
         run: |
           pip install pyserial 2>$null
           python ci/firmware_test.py --port "${{ inputs.serial_port }}"
-        shell: pwsh
+        shell: bash
 
       - name: 上传测试报告
         if: always()

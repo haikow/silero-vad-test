@@ -37,21 +37,24 @@ jobs:
 
   self-hosted-smoke:
     name: 本地 CI 机冒烟 (self-hosted)
-    # 验证本地 runner 与模型链路; 固件在环测试在 firmware.yml
+    # 跨平台: Windows/Mac runner 均可 (需 bash; Windows runner 依赖 Git Bash)
+    # 接入新机器: actions-runner/.env 里配 VAD_MODELS_CACHE 指向本机模型缓存目录(可选)
     runs-on: [self-hosted, vad-lab]
     steps:
       - uses: actions/checkout@v4
 
-      - name: 准备模型 (优先本机缓存, 避免网络依赖)
+      - name: 准备模型
+        shell: bash
         run: |
-          $cache = 'C:\Users\zbj\ZCodeProject\silero-vad-test\models'
-          if (Test-Path $cache) {
-            New-Item -ItemType Directory -Force models | Out-Null
-            Copy-Item "$cache\*.onnx" models\ -Force
-            echo "已从本机缓存复制模型"
-          } else { python download_models.py }
-        shell: pwsh
+          if [ -n "$VAD_MODELS_CACHE" ] && ls "$VAD_MODELS_CACHE"/*.onnx >/dev/null 2>&1; then
+            mkdir -p models && cp "$VAD_MODELS_CACHE"/*.onnx models/
+            echo "已从本机缓存复制模型: $VAD_MODELS_CACHE"
+          else
+            python download_models.py
+          fi
 
       - name: 基准回归测试
-        run: python ci/run_tests.py
-        shell: pwsh
+        shell: bash
+        run: |
+          python -m pip install --quiet -r requirements.txt
+          python ci/run_tests.py

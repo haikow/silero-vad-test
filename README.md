@@ -94,12 +94,20 @@ python ci/firmware_test.py --port COM7     # 固件协议在 ci/firmware_test.py
 
 ### 本地 CI 机 (self-hosted runner) 说明
 
-- runner 安装在 `C:\actions-runner`, 名称 `ci-local`, 标签 `vad-lab`, 当前以当前用户隐藏进程运行
-- 开机自启 (可选, 需管理员 PowerShell):
-  `schtasks /create /tn GitHubRunner /tr C:\actions-runner\run.cmd /sc onstart /ru system /f`
-  注意 SYSTEM 账户无用户级 Python, 届时 workflow 中需改用绝对 Python 路径
-- self-hosted job 的模型缓存路径硬编码为 `C:\Users\zbj\ZCodeProject\silero-vad-test\models`, 换机器时同步修改 `ci.yml`
-- `download_models.py` 已带国内镜像 fallback (hf-mirror / ghproxy), 断流网络下建议先手动跑一次预热缓存
+self-hosted job 已跨平台 (Windows/Mac 通用, 步骤统一用 bash; Windows runner 依赖 Git Bash):
+
+- Windows 本机: runner 在 `C:\actions-runner`, 名称 `ci-local`, 标签 `vad-lab`
+- 模型缓存 (可选加速): 在 runner 目录的 `.env` 文件配置, 如
+  `VAD_MODELS_CACHE=C:\Users\zbj\ZCodeProject\silero-vad-test\models`; 未配置时自动下载
+  (已带国内镜像 fallback)
+- **接入 Mac CI 机**:
+  1. `gh api -X POST repos/haikow/silero-vad-test/actions/runners/registration-token --jq .token`
+  2. 按 GitHub 页面指引下载 osx-x64/arm64 runner, `./config.cmd` (Mac 为 `./config.sh`)
+     --url https://github.com/haikow/silero-vad-test --token <TOKEN> --labels vad-lab --unattended
+  3. 同样在 `.env` 配置 `VAD_MODELS_CACHE` (可选), `./run.sh` 启动
+  4. 两台机器同用 `vad-lab` 标签, 空闲者接单; 基准回归与平台无关
+- Windows 开机自启 (可选, 需管理员): `schtasks /create /tn GitHubRunner /tr C:\actions-runner\run.cmd /sc onstart /ru system /f`
+  (SYSTEM 账户无用户级 Python, 届时 workflow 中需改用绝对 Python 路径)
 
 ### 固件到位后的接入步骤
 
