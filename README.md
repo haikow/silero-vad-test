@@ -21,10 +21,17 @@ silero-vad-test/
 ```bash
 pip install onnxruntime numpy soundfile   # Python 3.10+ 均可
 python download_models.py                 # 下载两个量化模型到 models/ (~850 KB)
-python test_vad.py
+python test_vad.py                        # 合成基准: 白噪声+TTS语音+白噪声
 ```
 
-模型和测试音频不入库：模型用 `download_models.py` 拉取；测试音频由 `test_vad.py` 首次运行时自动生成（需要 Windows TTS，非 Windows 平台可自行替换 `audio/speech_raw.wav` 为任意 16 kHz 可用的语音 wav）。
+分析任意真实音频（mp3/m4a/ogg/wav，自动转 16 kHz）：
+
+```bash
+pip install miniaudio                     # mp3 解码; m4a 等格式另需 ffmpeg 或 imageio-ffmpeg
+python analyze_audio.py 路径/xxx.mp3
+```
+
+模型和测试音频不入库：模型用 `download_models.py` 拉取；`test_vad.py` 的测试音频首次运行时自动生成（需要 Windows TTS，非 Windows 平台可自行替换 `audio/speech_raw.wav`）。
 
 > 许可证提示：代码部分可自由使用；两个模型的版权归 snakers4/silero-vad 项目（其许可证对商用有限制，商用前请查阅原仓库 LICENSE）。
 
