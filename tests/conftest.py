@@ -103,6 +103,55 @@ def snr_curve(runners):
     return curve
 
 
+# ---------- 真实咖啡馆 babble 场景 (test_cafe_noise.py) ----------
+CAFE_FIXTURE = BASE / "test_fixtures" / "cafe_noise_16k.wav"
+CAFE_SNR_STEPS_DB = (10, 5, 0)
+
+
+@pytest.fixture(scope="session")
+def cafe_audio():
+    audio, sr = sf.read(CAFE_FIXTURE, dtype="float32")
+    assert sr == SAMPLE_RATE, "咖啡馆素材不是 16k"
+    return audio
+
+
+@pytest.fixture(scope="session")
+def cafe_raw(runners, cafe_audio):
+    """裸咖啡馆噪声: 概率均值 + 四件套误触发段数 (部署口径)"""
+    from vad_decision import SpeechSegmenter
+    raw = {}
+    for k, r in runners.items():
+        p = sa.stream_probs(r, cafe_audio)
+        seg = SpeechSegmenter(); seg.feed(p)
+        segs = seg.final_segments()
+        raw[k] = {"mean": round(float(p.mean()), 4),
+                  "triggers": len(segs),
+                  "false_speech_s": round(sum(e - s for s, e in segs), 2)}
+    sa.METRICS["scenarios"]["cafe/raw"] = raw
+    return raw
+
+
+@pytest.fixture(scope="session")
+def cafe_snr(runners, cafe_audio):
+    """真实咖啡馆噪声下的 SNR 混合: {snr_db: {model: {mean, coverage}}}"""
+    curve = {}
+    speech = sa.speech_from_fixture(0.3)
+    for snr_db in CAFE_SNR_STEPS_DB:
+        noise = (cafe_audio[:len(speech)]
+                 * (speech.std() / (cafe_audio.std() + 1e-9) / 10 ** (snr_db / 20)))
+        x = sa.padded(speech + noise.astype(np.float32))
+        mask = sa.region_mask(len(range(0, len(x) - WINDOW, WINDOW)),
+                              0.75, len(x) / SAMPLE_RATE - 0.75)
+        entry = {}
+        for k, r in runners.items():
+            p = sa.stream_probs(r, x)[mask]
+            entry[k] = {"mean": round(float(p.mean()), 4),
+                        "coverage": round(float((p >= 0.5).mean()), 4)}
+        curve[snr_db] = entry
+        sa.METRICS["scenarios"][f"cafe/snr/{snr_db}dB"] = entry
+    return curve
+
+
 def pytest_sessionfinish(session, exitstatus):
     """把场景指标落盘为 CI 工件 (失败不影响测试结论; 为将来固件 HIL 对比预埋)"""
     if not sa.METRICS["scenarios"]:
