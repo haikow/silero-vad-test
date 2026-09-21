@@ -10,9 +10,16 @@ HiFi5 DSP + Neo NPU 可执行格式。
   核配置)后,XNNC 完整跑通 `flt_inference`——Silero float ONNX → TVM/Relay → GlowIR →
   流式 LSTM 状态管理 → 真实核参数,**210 窗逐窗概率与 PC onnxruntime 基准最大偏差
   0.000001、相关系数 1.000000**。
-- ✅ 物奇工具链三件套安装验证:`wq_hifi5_asic` 核配置接入 XtensaTools RI-2020.4,
-  xt-xcc 14.04 可运行(未见 license 拦截),GCC 版 xtensa-wuqi-elf-gcc 12.2 正常。
-- ⏳ 全流程(量化→gen_code)推进中;已知注意点见 cfg 头部踩坑记录。
+- ✅ 量化阶段通过(accuracy_level=3,HiFi 强制非对称量化);gen_code 生成完整 Xtensa
+  工程(output/silero_vad: CMake + networks + test_bench + 运行时)。
+- ⏳ **唯一缺口:Neo NPU 编译(XNNEC)需要 "neo params file"**(WQ7036 NPU 实例硬件
+  配置,可能还有 controller params)。不在 WQCORE 工具链里(已穷尽搜索),应在物奇
+  **固件 SDK** 中——向固件团队要,XNNEC 对应参数 `--neo_params_file` /
+  `--controller_params_file`。
+- ⚠️ 已知限制:去掉 NPU 卸载的纯 HiFi5 DSP 路径撞上 XNNC 3.2.2 内部 MLIR bug
+  (流式 LSTM 外部状态 memref 形状不匹配),纯 DSP 版本不可用——生产路径本就是 NPU。
+- xt-xcc 14.04(RI-2020.4)可运行,未见 license 拦截;若 gen_code 产物与新编译器版本
+  不兼容,向物奇 FAE 要 RJ-2024.3+patch 或改用 GCC 版工具链。
 
 ## WQCORE 物奇工具链(获取与安装)
 
