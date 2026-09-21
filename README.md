@@ -111,7 +111,7 @@ self-hosted job 已跨平台 (Windows/Mac 通用, 步骤统一用 bash; Windows 
 
 - Windows 本机: runner 在 `C:\actions-runner`, 名称 `ci-local`, 标签 `vad-lab`
 - 模型缓存 (可选加速): 在 runner 目录的 `.env` 文件配置, 如
-  `VAD_MODELS_CACHE=C:\Users\zbj\ZCodeProject\silero-vad-test\models`; 未配置时自动下载
+  `VAD_MODELS_CACHE=C:\Users\<用户名>\ZCodeProject\silero-vad-test\models`; 未配置时自动下载
   (已带国内镜像 fallback)
 - **Mac CI 机 (已接入, 2026-09-21, MacBook Air M3)**: runner 在 `~/actions-runner`, 名称 `vad-lab-mac`,
   标签 `vad-lab,vad-lab-mac` —— `vad-lab` 与 Windows 机共享接单(冒烟), `vad-lab-mac` 供 HIL 固定派单

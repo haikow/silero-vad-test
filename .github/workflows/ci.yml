@@ -3,7 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
-  pull_request:
+  # 注意: 故意不配 pull_request 触发 —— 仓库公开, 任何人可发 PR,
+  # PR 分支自带的 workflow 会被派给 self-hosted runner (本地 Mac) 执行,
+  # 这是陌生人代码进入本机的唯一入口, 保持关闭
   workflow_dispatch:
 
 # mikepenz/action-junit-report 需要写 check run (run 页逐用例标注)
@@ -56,6 +58,8 @@ jobs:
 
   self-hosted-smoke:
     name: 本地 CI 机冒烟 (self-hosted)
+    # 防御纵深: 万一将来重新启用 pull_request 触发, PR 事件也不落本地机器
+    if: github.event_name != 'pull_request'
     # 跨平台: Windows/Mac runner 均可 (需 bash; Windows runner 依赖 Git Bash)
     # 接入新机器: actions-runner/.env 里配 VAD_MODELS_CACHE 指向本机模型缓存目录(可选)
     runs-on: [self-hosted, vad-lab]
