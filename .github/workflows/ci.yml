@@ -24,16 +24,29 @@ jobs:
       - name: 下载量化模型
         run: python download_models.py
 
-      - name: 基准回归测试
-        run: python ci/run_tests.py
+      - name: 跑测试用例
+        run: pytest tests/ -v --junitxml=pytest-report.xml
 
-      - name: 上传基准文件 (排查用)
-        if: failure()
+      - name: 用例报告 (run 页可见每个用例)
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          check_name: "用例结果 (云端)"
+          report_paths: pytest-report.xml
+          include_passed: true
+          detailed_summary: true
+          job_summary: true
+          require_tests: true
+
+      - name: 上传测试报告 (排查用)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: baseline-reports
-          path: test_fixtures/
-          retention-days: 7
+          name: pytest-report-cloud
+          path: |
+            pytest-report.xml
+            test_fixtures/
+          retention-days: 14
 
   self-hosted-smoke:
     name: 本地 CI 机冒烟 (self-hosted)
@@ -54,7 +67,7 @@ jobs:
             "$PY" download_models.py
           fi
 
-      - name: 基准回归测试
+      - name: 跑测试用例
         shell: bash
         run: |
           set -e
@@ -63,4 +76,25 @@ jobs:
           "$PY" -m venv .venv
           if [ -x .venv/bin/python ]; then VP=.venv/bin/python; else VP=.venv/Scripts/python.exe; fi
           "$VP" -m pip install --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
-          "$VP" ci/run_tests.py
+          "$VP" -m pytest tests/ -v --junitxml=pytest-report.xml
+
+      - name: 用例报告 (run 页可见每个用例)
+        if: always()
+        uses: mikepenz/action-junit-report@v4
+        with:
+          check_name: "用例结果 (Mac CI 机)"
+          report_paths: pytest-report.xml
+          include_passed: true
+          detailed_summary: true
+          job_summary: true
+          require_tests: true
+
+      - name: 上传测试报告 (排查用)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-report-mac
+          path: |
+            pytest-report.xml
+            test_fixtures/
+          retention-days: 14

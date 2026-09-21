@@ -1,3 +1,4 @@
 onnxruntime>=1.17
 numpy
 soundfile
+pytest
