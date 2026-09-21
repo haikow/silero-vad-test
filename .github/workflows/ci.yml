@@ -39,6 +39,7 @@ jobs:
           check_name: "用例结果 (云端)"
           report_paths: pytest-report.xml
           include_passed: true
+          annotate_notice: true
           detailed_summary: true
           job_summary: true
           require_tests: true
@@ -90,6 +91,7 @@ jobs:
           check_name: "用例结果 (Mac CI 机)"
           report_paths: pytest-report.xml
           include_passed: true
+          annotate_notice: true
           detailed_summary: true
           job_summary: true
           require_tests: true
