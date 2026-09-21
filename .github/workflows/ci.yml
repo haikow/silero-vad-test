@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# mikepenz/action-junit-report 需要写 check run (run 页逐用例标注)
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   algo-regression:
     name: 算法基准回归 (云端)
