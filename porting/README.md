@@ -4,6 +4,45 @@
 (XNNC 3.2.2)完整编译环境,用于把 Silero VAD 模型编译为 WQ7036AC 芯片
 HiFi5 DSP + Neo NPU 可执行格式。
 
+## 当前进度(2026-09-21)
+
+- ✅ **环境全链路打通 + float 基准闭环验证**:拿到物奇 WQCORE 工具链(含 `wq_hifi5_asic`
+  核配置)后,XNNC 完整跑通 `flt_inference`——Silero float ONNX → TVM/Relay → GlowIR →
+  流式 LSTM 状态管理 → 真实核参数,**210 窗逐窗概率与 PC onnxruntime 基准最大偏差
+  0.000001、相关系数 1.000000**。
+- ✅ 物奇工具链三件套安装验证:`wq_hifi5_asic` 核配置接入 XtensaTools RI-2020.4,
+  xt-xcc 14.04 可运行(未见 license 拦截),GCC 版 xtensa-wuqi-elf-gcc 12.2 正常。
+- ⏳ 全流程(量化→gen_code)推进中;已知注意点见 cfg 头部踩坑记录。
+
+## WQCORE 物奇工具链(获取与安装)
+
+团队渠道拿到 `install.sh`(WQCORE Toolchain 自动安装器)后,工具链三件套从物奇服务器下载
+(`222.71.131.187:8888`,注意**不支持断点续传**):
+
+| 包 | 用途 |
+|---|---|
+| `wq_hifi5_asic_linux_redist.tgz` | **WQ7036 专用 HiFi5 核配置**(XNNC 必需) |
+| `XtensaTools_RI_2020_4_linux.tgz` | Xtensa 编译器 xt-xcc/xt-clang |
+| `xtensa-wuqi-elf-gcc-x64-64-12.2.0.tgz` | GCC 版 Xtensa 编译器(免 license 备选) |
+
+安装(在我们的容器里做,产物放到仓库根 `wqcore/`,gitignore):
+
+```bash
+mkdir -p wqcore/toolchain && cd wqcore
+# 下载三个 tgz 到 download/ 后:
+tar xzf download/xtensa-wuqi-elf-gcc-x64-64-12.2.0.tgz -C toolchain/
+tar xzf download/XtensaTools_RI_2020_4_linux.tgz       -C toolchain/
+tar xzf download/wq_hifi5_asic_linux_redist.tgz        -C toolchain/
+# 核配置接入 XtensaTools(容器内跑; 此后 XtensaTools/config/wq_hifi5_asic-params 存在):
+docker run --rm --platform linux/amd64 -v "$PWD":/opt/wqcore xnnc:3.2.2 \
+  bash -c "cd /opt/wqcore/toolchain/RI-2020.4-linux/wq_hifi5_asic && ./install --xtensa-tools ../XtensaTools"
+```
+
+`start-env.sh` 检测到 `wqcore/toolchain/` 会自动挂载为 `/opt/wqcore`(cfg 里的
+`xtensa_system` 正指向其 config 目录)。注意 XtensaTools 版本为 RI-2020.4,
+NeuroWeave 文档推荐 RJ-2024.3+patch(Neo NPU 场景);若 gen_code 阶段编译不兼容,
+向物奇 FAE 要新版或改用 GCC 版工具链。
+
 ## 背景
 
 - **目标芯片**: 物奇 WQ7036AC 蓝牙音频 SoC —— 应用核 RISC-V + 蓝牙核 RISC-V +

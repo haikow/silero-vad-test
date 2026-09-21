@@ -81,8 +81,13 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 # ---- 3. 进入容器 ----
-echo "==> 进入 XNNC 容器 (仓库挂载于 /work, 移植材料在 /work/porting/silero)"
+# WQCORE 物奇工具链(可选): 放在仓库根 wqcore/ (含 toolchain/RI-2020.4-linux/...) 自动挂载到 /opt/wqcore
+EXTRA_MOUNTS=()
+[ -d "$REPO_DIR/wqcore/toolchain" ] && EXTRA_MOUNTS+=(-v "$REPO_DIR/wqcore":/opt/wqcore)
+
+echo "==> 进入 XNNC 容器 (仓库挂载于 /work, 移植材料在 /work/porting/silero${EXTRA_MOUNTS:+, WQCORE 工具链在 /opt/wqcore})"
 exec docker run --rm -it --platform linux/amd64 \
   -v "$REPO_DIR":/work \
+  "${EXTRA_MOUNTS[@]}" \
   -w /work/porting \
   "$IMAGE"
