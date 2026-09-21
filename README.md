@@ -100,12 +100,16 @@ self-hosted job 已跨平台 (Windows/Mac 通用, 步骤统一用 bash; Windows 
 - 模型缓存 (可选加速): 在 runner 目录的 `.env` 文件配置, 如
   `VAD_MODELS_CACHE=C:\Users\zbj\ZCodeProject\silero-vad-test\models`; 未配置时自动下载
   (已带国内镜像 fallback)
-- **接入 Mac CI 机**:
-  1. `gh api -X POST repos/haikow/silero-vad-test/actions/runners/registration-token --jq .token`
-  2. 按 GitHub 页面指引下载 osx-x64/arm64 runner, `./config.cmd` (Mac 为 `./config.sh`)
-     --url https://github.com/haikow/silero-vad-test --token <TOKEN> --labels vad-lab --unattended
-  3. 同样在 `.env` 配置 `VAD_MODELS_CACHE` (可选), `./run.sh` 启动
-  4. 两台机器同用 `vad-lab` 标签, 空闲者接单; 基准回归与平台无关
+- **Mac CI 机 (已接入, 2026-09-21, MacBook Air M3)**: runner 在 `~/actions-runner`, 名称 `vad-lab-mac`,
+  标签 `vad-lab,vad-lab-mac` —— `vad-lab` 与 Windows 机共享接单(冒烟), `vad-lab-mac` 供 HIL 固定派单
+  (板子只插一台机器, 不能让空闲随机接单)。
+  - 常驻: launchd 用户代理 `~/Library/LaunchAgents/com.github.actions.runner.vad-lab-mac.plist`
+    (RunAtLoad + KeepAlive, 用 `caffeinate -i` 包裹 `run.sh` 防空闲睡眠, 免 sudo)。
+    **合盖仍会睡眠** (MacBook), 合盖当 CI 机用需 `sudo pmset -a disablesleep 1`。
+  - `.env`: `VAD_MODELS_CACHE=/Users/a1234/vad-lab/models`(模型缓存, job 零网络拉模型) +
+    `PATH=/opt/homebrew/bin:...` (brew `python@3.12 libomp`; 系统无 `python` 命令, workflow 用 venv bootstrap)
+  - 排查: `tail ~/actions-runner/runner-service.{out,err}.log`; 重启
+    `launchctl kickstart -k gui/$(id -u)/com.github.actions.runner.vad-lab-mac`
 - Windows 开机自启 (可选, 需管理员): `schtasks /create /tn GitHubRunner /tr C:\actions-runner\run.cmd /sc onstart /ru system /f`
   (SYSTEM 账户无用户级 Python, 届时 workflow 中需改用绝对 Python 路径)
 
