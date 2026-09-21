@@ -46,15 +46,21 @@ jobs:
       - name: 准备模型
         shell: bash
         run: |
+          if [ "$(uname -s)" = "Darwin" ]; then PY=python3; else PY=python; fi
           if [ -n "$VAD_MODELS_CACHE" ] && ls "$VAD_MODELS_CACHE"/*.onnx >/dev/null 2>&1; then
             mkdir -p models && cp "$VAD_MODELS_CACHE"/*.onnx models/
             echo "已从本机缓存复制模型: $VAD_MODELS_CACHE"
           else
-            python download_models.py
+            "$PY" download_models.py
           fi
 
       - name: 基准回归测试
         shell: bash
         run: |
-          python -m pip install --quiet -r requirements.txt
-          python ci/run_tests.py
+          set -e
+          # Mac CI 机: brew python3(.env 里 PATH 指向 /opt/homebrew/bin); Windows: Git Bash 的 python
+          if [ "$(uname -s)" = "Darwin" ]; then PY=python3; else PY=python; fi
+          "$PY" -m venv .venv
+          if [ -x .venv/bin/python ]; then VP=.venv/bin/python; else VP=.venv/Scripts/python.exe; fi
+          "$VP" -m pip install --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+          "$VP" ci/run_tests.py

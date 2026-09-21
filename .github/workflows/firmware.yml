@@ -10,13 +10,14 @@ on:
         required: false
         default: ""
       serial_port:
-        description: "开发板串口 (如 COM7)"
+        description: "开发板串口 (Mac: /dev/cu.usbserial-*; Windows: COM7)"
         required: false
         default: ""
 
 jobs:
   hil:
-    runs-on: [self-hosted, vad-lab]
+    # HIL 板子接在 Mac CI 机上, 固定标签; 换机器时改这里
+    runs-on: [self-hosted, vad-lab-mac]
     steps:
       - uses: actions/checkout@v4
 
@@ -28,10 +29,14 @@ jobs:
         shell: bash
 
       - name: 固件 VAD 比对测试
-        run: |
-          pip install pyserial 2>$null
-          python ci/firmware_test.py --port "${{ inputs.serial_port }}"
         shell: bash
+        run: |
+          set -e
+          if [ "$(uname -s)" = "Darwin" ]; then PY=python3; else PY=python; fi
+          "$PY" -m venv .venv
+          if [ -x .venv/bin/python ]; then VP=.venv/bin/python; else VP=.venv/Scripts/python.exe; fi
+          "$VP" -m pip install --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt pyserial
+          "$VP" ci/firmware_test.py --port "${{ inputs.serial_port }}"
 
       - name: 上传测试报告
         if: always()
