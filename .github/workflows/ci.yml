@@ -53,6 +53,7 @@ jobs:
           name: pytest-report-cloud
           path: |
             pytest-report.xml
+            scenario_metrics.json
             test_fixtures/
           retention-days: 14
 
@@ -107,5 +108,6 @@ jobs:
           name: pytest-report-mac
           path: |
             pytest-report.xml
+            scenario_metrics.json
             test_fixtures/
           retention-days: 14

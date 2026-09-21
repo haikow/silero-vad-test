@@ -41,6 +41,82 @@ def infer_probs(audio) -> dict:
     return out
 
 
+# ---------- 场景套件 (test_scenarios.py 用): session 级复用 runner, 指标落盘 ----------
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import scenario_audio as sa  # noqa: E402
+
+LEVEL_PEAKS = (0.05, 0.1, 0.3, 0.8)
+NOISE_KINDS = ("white", "pink", "brown")
+NOISE_RMS = (0.05, 0.15)
+SNR_STEPS_DB = (20, 10, 5)
+SPEECH_PAD_S = 0.75
+
+
+@pytest.fixture(scope="session")
+def runners():
+    """每个模型一个常驻 runner (ONNX 会话只建一次; 用前必须 reset, sa.stream_probs 负责)"""
+    return {k: VadRunner(p) for k, p in MODEL_PATHS.items()}
+
+
+@pytest.fixture(scope="session")
+def level_curve(runners):
+    """电平矩阵: {peak: {model: 语音段平均概率}}"""
+    curve = {}
+    for peak in LEVEL_PEAKS:
+        x = sa.padded(sa.speech_from_fixture(peak), SPEECH_PAD_S)
+        curve[peak] = {k: float(sa.stream_probs(r, x)[
+            sa.region_mask(len(range(0, len(x) - WINDOW, WINDOW)),
+                           SPEECH_PAD_S, SPEECH_PAD_S + len(x) / 16000 - 2 * SPEECH_PAD_S
+                           )].mean()) for k, r in runners.items()}
+        sa.METRICS["scenarios"][f"level/peak={peak}"] = curve[peak]
+    return curve
+
+
+@pytest.fixture(scope="session")
+def noise_table(runners):
+    """噪声误报: {(kind, rms): {model: 全程平均概率}}"""
+    table = {}
+    for kind in NOISE_KINDS:
+        for rms in NOISE_RMS:
+            x = sa.noise_clip(kind, 5.0, rms)
+            p = {k: float(sa.stream_probs(r, x)[5:].mean()) for k, r in runners.items()}
+            table[(kind, rms)] = p
+            sa.METRICS["scenarios"][f"noise/{kind}/rms={rms}"] = p
+    return table
+
+
+@pytest.fixture(scope="session")
+def snr_curve(runners):
+    """SNR 阶梯: {snr_db: {model: {"mean": 语音段均值, "coverage": >=0.5 检出覆盖}}}"""
+    curve = {}
+    for snr_db in SNR_STEPS_DB:
+        x = sa.snr_mix(speech_peak=0.3, snr_db=snr_db)
+        mask = sa.region_mask(len(range(0, len(x) - WINDOW, WINDOW)),
+                              SPEECH_PAD_S, len(x) / 16000 - SPEECH_PAD_S)
+        entry = {}
+        for k, r in runners.items():
+            p = sa.stream_probs(r, x)[mask]
+            entry[k] = {"mean": round(float(p.mean()), 4),
+                        "coverage": round(float((p >= 0.5).mean()), 4)}
+        curve[snr_db] = entry
+        sa.METRICS["scenarios"][f"snr/{snr_db}dB"] = entry
+    return curve
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """把场景指标落盘为 CI 工件 (失败不影响测试结论; 为将来固件 HIL 对比预埋)"""
+    if not sa.METRICS["scenarios"]:
+        return
+    import json
+    out = BASE / "scenario_metrics.json"
+    try:
+        out.write_text(json.dumps(sa.METRICS, ensure_ascii=False, indent=1),
+                       encoding="utf-8")
+        print(f"\n场景指标已写入: {out}")
+    except OSError as e:  # 只读工作区等情况
+        print(f"\n(场景指标写盘失败, 忽略: {e})")
+
+
 @pytest.fixture(scope="session")
 def audio():
     a, sr = sf.read(FIXTURE, dtype="float32")

@@ -6,3 +6,4 @@ __pycache__/
 rt_debug*.json
 hil_result.json
 .venv/
+scenario_metrics.json
