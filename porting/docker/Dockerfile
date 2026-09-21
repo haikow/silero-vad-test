@@ -67,5 +67,9 @@ RUN /opt/xnnc_venv/bin/pip install --no-cache-dir \
 
 ENV PATH=/opt/xnnc_venv/bin:$PATH
 
+# XNNC 自带 TVM 的 libtvm.so 链接 libtinfo.so.5 (jammy 默认只有 6), 单独补一层
+RUN apt-get update && apt-get install -y --no-install-recommends libtinfo5 \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /work
 CMD ["/bin/bash"]
