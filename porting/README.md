@@ -12,10 +12,15 @@ HiFi5 DSP + Neo NPU 可执行格式。
   0.000001、相关系数 1.000000**。
 - ✅ 量化阶段通过(accuracy_level=3,HiFi 强制非对称量化);gen_code 生成完整 Xtensa
   工程(output/silero_vad: CMake + networks + test_bench + 运行时)。
-- ⏳ **唯一缺口:Neo NPU 编译(XNNEC)需要 "neo params file"**(WQ7036 NPU 实例硬件
-  配置,可能还有 controller params)。不在 WQCORE 工具链里(已穷尽搜索),应在物奇
-  **固件 SDK** 中——向固件团队要,XNNEC 对应参数 `--neo_params_file` /
-  `--controller_params_file`。
+- ⏳ **NPU 路线缺口(2026-09-21 复核确认,比"缺一个文件"更根本)**:XNNEC 报缺
+  "neo params file"。反汇编 XNNEC 字节码确认默认查找链:①`--neo_params_file` 参数
+  ②cfg `[system] neo_params_file` ③cfg `neo_params` ④默认拼
+  `<config>/<核名>_neo-params` ⑤回退用核参数文件自身的 `XNNEVersion` 行——全部落空,
+  且全盘搜索 wqcore/XNNC 两棵树无任何 `*_neo-params`。**根因:这份 `wq_hifi5_asic`
+  核配置(RI-2020.4, 2020 年)第 26 行明写 `HasXNNE = 0`——是无 NPU 附件的固件编译配置**,
+  不携带 WQ7036 NPU 实例信息。向物奇要的应是**整套 NPU 使能配置**:RJ-2024.3+patch916454
+  工具 + 含 `XNNEVersion`/`HasXNNE=1` 的核配置 + neo/controller params(文档 §2 本就
+  指定 RJ-2024.3 用于 Neo NPU,RI-2020.4 年代尚无 Neo 集成)。
 - ⚠️ 已知限制:去掉 NPU 卸载的纯 HiFi5 DSP 路径撞上 XNNC 3.2.2 内部 MLIR bug
   (流式 LSTM 外部状态 memref 形状不匹配),纯 DSP 版本不可用——生产路径本就是 NPU。
 - xt-xcc 14.04(RI-2020.4)可运行,未见 license 拦截;若 gen_code 产物与新编译器版本
