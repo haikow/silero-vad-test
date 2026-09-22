@@ -95,3 +95,13 @@ MD5 c2b9db46d99aa8b5597a1730116969f7),测试包在 `~/Desktop/silero-vad-固件�
 **性能**:xt-clang 会用 HiFi5 FPU 编我们的纯 C float 代码(网络仅 ~70 万 MAC/窗,
 余量很大)。若将来要省功耗再考虑 int16 版(见 ../int16_wip/,目前 92% 场景一致率,
 WIP 状态)。
+
+## wpk 产物(本目录 wpk/)
+
+| 文件 | 目标芯片 | MD5 | 说明 |
+|---|---|---|---|
+| glass-stereo-dac-7036AX-0.0.0.0.wpk | **7036AX**(当前目标板) | c2b9db46d99aa8b5597a1730116969f7 | stereo.dac 基线, GCC 联调版, 含 HIL 自检 |
+| ai-recorder-7036AC-0.0.0.0.wpk | 7036AC | 65cac9c20ce957a808bde25591eb4732 | ai.recorder 基线, 同上 |
+
+> 注:原计划挂 GitHub release,当前网络 uploads.github.com 不通,wpk 直接入私有库
+> (一次性 ~4.3MB,可接受;后续高频迭代版建议本地留档、不重复入库)。
