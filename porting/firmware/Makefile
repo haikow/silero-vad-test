@@ -35,7 +35,6 @@ XAR  = $(WQCORE)/toolchain/xtensa-wuqi-elf-gcc-x64-64-12.2.0/bin/xtensa-wuqi-elf
 
 cross-gcc:
 	mkdir -p build_gcc
-	$(XGCC) -O2 -std=c99 -Wall -c silero_vad.c wq_silero_vad.c silero_vad_weights.c -o /dev/null 2>/dev/null || true
 	cd build_gcc && $(XGCC) -O2 -std=c99 -Wall -c ../silero_vad.c ../wq_silero_vad.c ../silero_vad_weights.c
 	cd build_gcc && $(XAR) rcs libwq_silero_vad.a silero_vad.o wq_silero_vad.o silero_vad_weights.o
 	@echo "=> build_gcc/libwq_silero_vad.a (elf32-xtensa, 软浮点, 功能验证用)"
