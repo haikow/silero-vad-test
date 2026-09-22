@@ -152,6 +152,51 @@ def cafe_snr(runners, cafe_audio):
     return curve
 
 
+# ---------- 真实雨声场景 (test_rain_noise.py) ----------
+RAIN_NOISE_FIXTURE = BASE / "test_fixtures" / "rain_noise_16k.wav"
+RAIN_SPEECH_FIXTURE = BASE / "test_fixtures" / "rain_speech_16k.wav"
+# 旁白活动窗 (素材内相对时间, 源视频 29.9-59.4s, 文件起点 25s)
+RAIN_ACT0, RAIN_ACT1 = 4.9, 34.4
+
+
+@pytest.fixture(scope="session")
+def rain_noise_stats(runners):
+    """裸雨声+采菌脆响: 均值 + 四件套误触发段数"""
+    from vad_decision import SpeechSegmenter
+    audio, sr = sf.read(RAIN_NOISE_FIXTURE, dtype="float32")
+    assert sr == SAMPLE_RATE
+    stats = {}
+    for k, r in runners.items():
+        p = sa.stream_probs(r, audio)
+        seg = SpeechSegmenter(); seg.feed(p)
+        stats[k] = {"mean": round(float(p.mean()), 4),
+                    "triggers": len(seg.final_segments())}
+    sa.METRICS["scenarios"]["rain/noise"] = stats
+    return stats
+
+
+@pytest.fixture(scope="session")
+def rain_speech_stats(runners):
+    """雨中轻声旁白: 均值/段数/活动窗覆盖率/交叠比 (uint8 假阴性 vs int8 检出)"""
+    from vad_decision import SpeechSegmenter
+    audio, sr = sf.read(RAIN_SPEECH_FIXTURE, dtype="float32")
+    assert sr == SAMPLE_RATE
+    stats = {}
+    for k, r in runners.items():
+        p = sa.stream_probs(r, audio)
+        seg = SpeechSegmenter(); seg.feed(p)
+        segs = seg.final_segments()
+        t = np.arange(len(p)) * WINDOW / SAMPLE_RATE + WINDOW / SAMPLE_RATE / 2
+        act = (t >= RAIN_ACT0) & (t < RAIN_ACT1)
+        overlap = sum(max(0.0, min(e, RAIN_ACT1) - max(s0, RAIN_ACT0)) for s0, e in segs)
+        stats[k] = {"mean": round(float(p.mean()), 4),
+                    "segments": len(segs),
+                    "coverage": round(float((p[act] >= 0.5).mean()), 4),
+                    "overlap": round(overlap / (RAIN_ACT1 - RAIN_ACT0), 4)}
+    sa.METRICS["scenarios"]["rain/speech"] = stats
+    return stats
+
+
 def pytest_sessionfinish(session, exitstatus):
     """把场景指标落盘为 CI 工件 (失败不影响测试结论; 为将来固件 HIL 对比预埋)"""
     if not sa.METRICS["scenarios"]:
