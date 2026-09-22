@@ -51,14 +51,25 @@ ORDER = [
     "decoder.decoder.1.weight", "decoder.decoder.1.bias",
 ]
 
-lines = ["// 自动生成: silero v4 float ONNX 权重 (勿手改, 由 gen_weights.py 重新生成)", ""]
+lines = [
+    "// 自动生成: silero v4 float ONNX 权重 (勿手改, 由 gen_weights.py 重新生成)",
+    "",
+    "/* 7036AX: DRAM 768KB 放不下 623KB 权重, 链接到 icache.literal 段 (1MB, 基本空闲).",
+    " * 段名仅 Xtensa 链接脚本识别, 桌面编译(clang/gcc)不带该属性以保持 make test 可用. */",
+    "#if defined(__XTENSA__)",
+    "#define SV_WSEC __attribute__((section(\".icache.literal\")))",
+    "#else",
+    "#define SV_WSEC",
+    "#endif",
+    "",
+]
 total = 0
 for n in ORDER:
     arr = np.ascontiguousarray(inits[n], dtype=np.float32)
     flat = arr.ravel()
     total += flat.size
     lines.append(f"/* {n} {list(arr.shape)} */")
-    lines.append(f"const float sv_{c_name(n)}[{flat.size}] = {{")
+    lines.append(f"const float SV_WSEC sv_{c_name(n)}[{flat.size}] = {{")
     vals = [fmt(x) for x in flat]
     lines.append(",\n".join(", ".join(vals[i:i+8]) for i in range(0, len(vals), 8)))
     lines.append("};")

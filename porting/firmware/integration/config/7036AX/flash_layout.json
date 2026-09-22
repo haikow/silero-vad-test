@@ -1,0 +1,68 @@
+{
+    "positive": [
+        {
+            "name": "bcore image",
+            "id": 48,
+            "sectors": 284,
+            "file": "BUILT_BCORE"
+        },
+        {
+            "name": "dcore image",
+            "id": 112,
+            "sectors": 400,
+            "file": "BUILT_DCORE"
+        },
+        {
+            "name": "acore image",
+            "id": 32,
+            "sectors": 200,
+            "file": "BUILT_ACORE"
+        },
+        {
+            "name": "tone0",
+            "id": 144,
+            "sectors": 50,
+            "file": "tone.bin"
+        }
+    ],
+    "reverse": [
+        {
+            "name": "anc_coeff",
+            "id": 192,
+            "sectors": 2,
+            "file": "anc_coeff.bin",
+            "macro": "CUS0"
+        },
+        {
+            "name": "ro_config",
+            "id": 194,
+            "sectors": 2,
+            "file": "ro_cfg.bin",
+            "macro": "CUS2"
+        },
+        {
+            "name": "sys_config",
+            "id": 195,
+            "sectors": 2,
+            "macro": "CUS3"
+        },
+        {
+            "name": "usr_config",
+            "id": 196,
+            "sectors": 2,
+            "macro": "CUS4"
+        }
+    ],
+    "extra": [
+        {
+            "name": "flash1",
+            "partitions": [
+                {
+                    "name": "extra user data",
+                    "id": 135,
+                    "sectors": 1280
+                }
+            ]
+        }
+    ]
+}
