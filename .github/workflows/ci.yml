@@ -46,6 +46,11 @@ jobs:
           job_summary: true
           require_tests: true
 
+      - name: 场景指标总览 (run 页摘要)
+        if: always()
+        run: |
+          if [ -f scenario_metrics.json ]; then python ci/render_metrics.py --summary; fi
+
       - name: 上传测试报告 (排查用)
         if: always()
         uses: actions/upload-artifact@v4
@@ -100,6 +105,15 @@ jobs:
           detailed_summary: true
           job_summary: true
           require_tests: true
+
+      - name: 场景指标总览 (run 页摘要)
+        if: always()
+        shell: bash
+        run: |
+          if [ -f scenario_metrics.json ]; then
+            if [ -x .venv/bin/python ]; then VP=.venv/bin/python; else VP=python3; fi
+            "$VP" ci/render_metrics.py --summary
+          fi
 
       - name: 上传测试报告 (排查用)
         if: always()

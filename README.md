@@ -76,7 +76,8 @@ python vad_realtime.py --gate v4  # 波形门控改用 v4/int8 概率
 
 push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-09-22 起 69 条)。
 **run 页面可见每个用例的 pass/fail**: 打开某次 Actions run -> 摘要区有按用例的结果表格,
-下方 Annotations 逐条列出用例名; `pytest-report-*.xml` 工件含完整报告,
+下方 Annotations 逐条列出用例名; 摘要区还有 **VAD 场景指标总览表**(两模型各场景实测值,
+关键对比速览在表头, `ci/render_metrics.py` 本地可随时打印); `pytest-report-*.xml` 工件含完整报告,
 `scenario_metrics.json` 工件是场景指标表 (将来固件 HIL 跑同一组场景对比用)。
 
 | Job | 运行位置 | 内容 |
