@@ -49,3 +49,26 @@ docker run --platform linux/amd64 -v <sdk>:/work -v <wqcore>:/opt/wqcore \
 1. wpk 经 PCBA 烧录工具写入开发板(wq-debug-tools/Beetle);
 2. VAD 事件经 app_customer_vad 的 BLE 协议(0x09FF)或 dump 通路验证;
 3. HIL:UART 逐窗概率(wq_silero_last_prob)vs PC 基准,验收线 0.1。
+
+
+## 给物奇固件团队的交接说明(xt-clang + license 生产版)
+
+**你们环境里只需三步,源码零适配:**
+
+1. **拷文件**(从本仓库 porting/firmware/ 取):
+   - `silero_vad.c` `silero_vad_weights.c` `wq_silero_vad.c` → SDK `components/audio_algorithm/processor/src/`
+   - `silero_vad.h` `silero_vad_consts.h` `wq_silero_vad.h` `wq_sw_vad.h` → `processor/inc/`
+2. **挪库**:`lib/wq_sw_vad` 整目录移出 `lib/`(如 `lib_disabled/`;移回即回退原厂 VAD)
+3. **配置**:在你们现有 defconfig 上加 `CONFIG_VAD_ENABLE=y`(**保持
+   `CONFIG_XT_TOOLCHAIN_XT_CLANG=y` 不动**);`flash_layout.json` 的 dcore 分区
+   300→400 扇区(权重 623KB 进镜像后需要);然后正常 `scons`。
+
+**注意**:本仓库 integration/ 目录里的 `wq_gcc_shim.c` 和 xtensa_tools.py 的
+-Wno-error 补丁**你们不需要**——那是我们无 license 的 GCC 联调环境专用;
+你们的 defconfig 也不用换 `defconfig.silero`(那是 GCC 版专用),
+在**自己的 defconfig 上加 VAD 开关即可**。验证:编出来的 dcore elf 里
+`nm | grep sv_process` 有符号、`grep WebRtcVad` 为零即替换成功。
+
+**性能**:xt-clang 会用 HiFi5 FPU 编我们的纯 C float 代码(网络仅 ~70 万 MAC/窗,
+余量很大)。若将来要省功耗再考虑 int16 版(见 ../int16_wip/,目前 92% 场景一致率,
+WIP 状态)。
