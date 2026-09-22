@@ -51,8 +51,20 @@ conv1x1 输入布局是 [C][T] 行主序。
    HiFi5 有单精度 FPU,float 实现可直接跑(约 1M MAC/窗,余量极大)
 5. HIL 验收:`wq_silero_last_prob()` 取逐窗概率,UART 上报比对 PC 基准(≤0.1)
 
+## 交叉编译验证(2026-09-22, wqcore 工具链实测)
+
+| 工具链 | 结果 | 用途 |
+|---|---|---|
+| **GCC 12.2**(xtensa-wuqi-elf) | ✅ 编译通过,elf32-xtensa,ISA 基础兼容(XtensaTools objdump 校验) | 功能验证/CI;**注意:软浮点构建**(),不用 FPU,实时性能不够 |
+| xt-xcc / **xt-clang**(RI-2020.4) | ⚠️ 需 license(编译时 checkout  失败,期望 ) | **生产固件实际用它**:wqcore SCons 构建支持 gcc/xcc/xt-clang 三选,glass 7036AC defconfig 选  |
+
+体积: text 3.9K + bss 41.7K + rodata(权重)623K = 669K。
+集成提示:在物奇固件团队的实际构建环境里(有 license 的 xt-clang),本库源码直接编入即可,
+(容器内)可出软浮点静态库用于无 license 环境的功能联调。
+
 ## 后续优化项(按需)
 
-- int8/int16 量化版(权重 601KB→154KB,功耗更优;当前 float 精度已是满级)
+- int8/int16 量化版(权重 601KB→154KB;且定点化可摆脱对 FPU/编译器浮点能力的依赖,
+  对软浮点 GCC 环境也能实时——HiFi5 整数 MAC 本就是强项)
 - Xtensa 向量化(HiFi5 DSP 指令,conv/LSTM 点积用 intrinsics)
 - 权重放 flash 由 init 加载(当前编译进固件 const 区)

@@ -26,3 +26,18 @@ clean:
 	rm -f *.o *.a test_ref test_wq
 
 .PHONY: all test clean
+
+# ---- 交叉编译(容器内执行, wqcore 挂载在 /opt/wqcore) ----
+# GCC 12.2 软浮点版: 可编译/功能验证用; 生产固件(glass/7036AC)实际用 xt-clang(需 license)
+WQCORE ?= /opt/wqcore
+XGCC = $(WQCORE)/toolchain/xtensa-wuqi-elf-gcc-x64-64-12.2.0/bin/xtensa-wuqi-elf-gcc
+XAR  = $(WQCORE)/toolchain/xtensa-wuqi-elf-gcc-x64-64-12.2.0/bin/xtensa-wuqi-elf-ar
+
+cross-gcc:
+	mkdir -p build_gcc
+	$(XGCC) -O2 -std=c99 -Wall -c silero_vad.c wq_silero_vad.c silero_vad_weights.c -o /dev/null 2>/dev/null || true
+	cd build_gcc && $(XGCC) -O2 -std=c99 -Wall -c ../silero_vad.c ../wq_silero_vad.c ../silero_vad_weights.c
+	cd build_gcc && $(XAR) rcs libwq_silero_vad.a silero_vad.o wq_silero_vad.o silero_vad_weights.o
+	@echo "=> build_gcc/libwq_silero_vad.a (elf32-xtensa, 软浮点, 功能验证用)"
+
+.PHONY: cross-gcc
