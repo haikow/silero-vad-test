@@ -277,6 +277,31 @@ def do_shil(args):
     return 0
 
 
+def do_loopback(args):
+    """适配器自测: 把适配器上的 TX 针脚和 RX 针脚用杜邦线直接短接后运行"""
+    ser = serial.Serial(args.port, 115200, timeout=0.1)
+    ok = 0
+    rounds = 20
+    for i in range(rounds):
+        sent = b"\x55" * 32 + bytes([i])
+        ser.reset_input_buffer()
+        ser.write(sent)
+        ser.flush()
+        time.sleep(0.12)
+        got = ser.read(128)
+        if got.startswith(sent[:16]):
+            ok += 1
+    ser.close()
+    print(f"回环 {ok}/{rounds} 组收到自发数据")
+    if ok >= 18:
+        print("适配器 TX/RX 双向全部正常 —— 故障在板子侧(供电或接线)")
+    elif ok > 0:
+        print("部分回环成功 —— 短接接触不良, 重新插好再试")
+    else:
+        print("零回环 —— 适配器 RX 方向故障或未短接, 更换适配器/检查短接线")
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="WQ7036 Mac 原生烧录器(协议源: SDK updater + 官方工具 DLL 对拍)")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -287,6 +312,9 @@ def main():
     p.add_argument("-p", "--port", default=DEFAULT_PORT)
     p.add_argument("-b", "--baud", type=int, default=2000000)
     p.set_defaults(fn=do_sniff)
+    p = sub.add_parser("loopback", help="适配器自测(需把适配器 TX/RX 两针短接)")
+    p.add_argument("-p", "--port", default=DEFAULT_PORT)
+    p.set_defaults(fn=do_loopback)
     p = sub.add_parser("burn", help="烧录 wpk")
     p.add_argument("wpk")
     p.add_argument("-p", "--port", default=DEFAULT_PORT)
