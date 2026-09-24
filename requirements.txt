@@ -2,3 +2,5 @@ onnxruntime>=1.17
 numpy
 soundfile
 pytest
+setuptools<81
+webrtcvad

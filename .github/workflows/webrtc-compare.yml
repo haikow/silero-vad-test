@@ -1,0 +1,53 @@
+name: 原厂 WebRTC VAD 对比
+
+# 原厂 libwq_sw_vad.a 算法本体 = 开源 WebRTC VAD; 用同源开源实现(webrtcvad,
+# 官方 C 源码)在 Mac CI 机上跑同一组场景, 4 档激进度逐档对比 Silero 量化模型
+# (Silero 侧数值 = 先跑完整用例套件生成的 scenario_metrics.json)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [ci/compare_webrtc.py, requirements.txt, ".github/workflows/webrtc-compare.yml", "tests/**", "test_fixtures/**"]
+
+jobs:
+  webrtc-vs-silero:
+    runs-on: [self-hosted, vad-lab-mac]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 准备模型
+        shell: bash
+        run: |
+          if [ -n "$VAD_MODELS_CACHE" ] && ls "$VAD_MODELS_CACHE"/*.onnx >/dev/null 2>&1; then
+            mkdir -p models && cp "$VAD_MODELS_CACHE"/*.onnx models/
+            echo "已从本机缓存复制模型: $VAD_MODELS_CACHE"
+          else
+            python3 download_models.py
+          fi
+
+      - name: 用例套件 + WebRTC 对比
+        shell: bash
+        run: |
+          set -e
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet -i https://pypi.tuna.tsinghua.edu.cn/simple -r requirements.txt
+          .venv/bin/python -m pytest tests/ -q --junitxml=pytest-report.xml
+          .venv/bin/python -W ignore ci/compare_webrtc.py | tee webrtc-compare.txt
+
+      - name: 写入 run 页摘要
+        if: always()
+        shell: bash
+        run: |
+          if [ -f webrtc-compare.txt ]; then
+            { echo "## 原厂 WebRTC VAD (同源开源, 激进度 0-3) vs Silero 量化"; echo '```'; cat webrtc-compare.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: 上传对比数据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: webrtc-compare
+          path: |
+            webrtc-compare.txt
+            scenario_metrics.json
+          retention-days: 30
