@@ -9,7 +9,9 @@
 #include "silero_hil_audio.h"
 #include "wq_heap.h"
 #include "wq_silero_vad.h"
+#include "wq_timer.h"
 
+#define SILERO_HIL_PACE_MS 0   /* 诊断构建B: >0 时每帧间隔延时, 避免长时间霸占 dcore 触发 WDT */
 #if is_defined(CONFIG_AUDIO_VAD_ENABLE)
 
 void wq_silero_hil_selftest(void)
@@ -27,6 +29,9 @@ void wq_silero_hil_selftest(void)
     int total = SILERO_HIL_WINDOWS * 512;
     int win = 0;
     for (int off = 0; off + 320 <= total; off += 320) {
+#if SILERO_HIL_PACE_MS > 0
+        wq_timer_delay_ms(SILERO_HIL_PACE_MS);
+#endif
         wq_sw_vad_process(hd, (char *)(p + off), 640);
         float prob = wq_silero_last_prob();
         /* 每 1.6 帧出一个窗概率; 用窗口计数对齐(与 PC 端 test_wq 相同机制) */

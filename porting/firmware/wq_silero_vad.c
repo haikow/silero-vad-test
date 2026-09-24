@@ -26,6 +26,8 @@ void *wq_sw_vad_init(void *vad_hd, void *pscratch)
     return hd;
 }
 
+#define SILERO_STUB 0   /* 诊断构建A: 1=跳过推理直接判无语音(定位 WDT 崩溃用) */
+
 int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
 {
     wq_silero_hd_t *hd = (wq_silero_hd_t *)vad_hd;
@@ -43,7 +45,11 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
         n -= take;
 
         if (hd->acc_n == WQ_SILERO_ACC) {
+#if SILERO_STUB
+            hd->last_prob = 0.0f;   /* stub: 不推理, 概率恒 0 */
+#else
             hd->last_prob = sv_process(&hd->sv, hd->acc);
+#endif
             hd->windows++;
             if (hd->last_prob >= WQ_SILERO_THRESHOLD) hit = 1;
             hd->acc_n = 0;      /* 无重叠: 下一窗从零攒 */
