@@ -180,12 +180,19 @@ def burn_worker(port, wpk_path, hi_baud):
         blog(f"wpk: {os.path.basename(wpk_path)} | {cfg['chip']} | {len(cfg['images'])} 分区")
 
         s = WqSerial(port)
-        # 官方工具等效动作: DTR 持续使能 + RTS 复位脉冲(SerialPortBase.Open/HardRest)
+        # 官方 SerialPortBase.Open/HardRest: DTR 持续拉住 + RTS 复位脉冲
         s.ser.dtr = True
-        blog("DTR 已拉住(下载模式条件), 发 RTS 复位脉冲…")
+        blog("DTR 拉住 + RTS 复位脉冲…")
         s.ser.rts = True
         time.sleep(0.2)
         s.ser.rts = False
+        time.sleep(0.3)
+        # 官方 FWUpdateReset: 115200 下 CHIP_RESET 连发 3 次, 间隔 20ms
+        blog("FWUpdateReset: CHIP_RESET x3 @115200 …")
+        for _ in range(3):
+            s.send(CMD_CHIP_RESET)
+            time.sleep(0.02)
+        time.sleep(0.5)
         # 第 0 步: send ram —— 与官方工具一致, 先 XMODEM 把 updater.bin 送进 RAM
         upd = z.read("updater.bin") if "updater.bin" in z.namelist() else None
         if upd:
