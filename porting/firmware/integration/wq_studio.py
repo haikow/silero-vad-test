@@ -88,6 +88,67 @@ class WqSerial:
         self.ser.close()
 
 
+def crc16_xmodem(data, crc=0):
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) if (crc & 0x8000) else (crc << 1)
+            crc &= 0xFFFF
+    return crc
+
+
+def xmodem_send(ser, data, log=print, timeout_s=12):
+    """XMODEM-CRC 发送(芯片=接收方发'C'): 把 updater 传进 RAM。返回 True/False"""
+    import time as _t
+    ser.timeout = 1.0
+    deadline = _t.time() + timeout_s
+    got_c = False
+    log("等待芯片 XMODEM 请求('C')… 请确认板子已进下载模式")
+    while _t.time() < deadline:
+        d = ser.read(64)
+        if d:
+            if 0x43 in d:          # 'C' = CRC 模式请求
+                got_c = True
+                break
+            if 0x15 in d:          # NAK = 校验和模式, 继续等 C
+                continue
+    if not got_c:
+        return False
+    log("OK 芯片已请求 XMODEM 传输")
+    block_no, i = 1, 0
+    ser.timeout = 3.0
+    while i < len(data):
+        chunk = data[i:i + 128]
+        chunk = chunk + b"\x1a" * (128 - len(chunk))
+        pkt = bytes([0x01, block_no & 0xFF, 0xFF - (block_no & 0xFF)]) + chunk + \
+              struct.pack(">H", crc16_xmodem(chunk))
+        for _ in range(10):
+            ser.reset_input_buffer()
+            ser.write(pkt)
+            ser.flush()
+            r = ser.read(1)
+            if r == b"\x06":     # ACK
+                break
+            if r == b"\x43":     # 重传请求
+                continue
+        else:
+            log(f"块 {block_no} 重试 10 次无 ACK")
+            return False
+        block_no = (block_no + 1) & 0xFF
+        i += 128
+        if block_no % 16 == 0:
+            log(f"  已传 {i:,}/{len(data):,} 字节")
+    for _ in range(10):
+        ser.write(b"\x04")
+        ser.flush()
+        r = ser.read(1)
+        if r == b"\x06":
+            break
+    log(f"OK XMODEM 传输完成({len(data):,} 字节), 等待 updater 启动…")
+    _t.sleep(1.5)
+    return True
+
+
 # ============ 全局状态 ============
 S = {
     "burn": {"running": False, "done": False, "ok": False, "step": "", "pct": 0,
@@ -115,7 +176,15 @@ def burn_worker(port, wpk_path, hi_baud):
         blog(f"wpk: {os.path.basename(wpk_path)} | {cfg['chip']} | {len(cfg['images'])} 分区")
 
         s = WqSerial(port)
-        blog("115200 握手中… 请确认板子已进下载模式(上电时 GPIO_101 为高)")
+        # 第 0 步: send ram —— 与官方工具一致, 先 XMODEM 把 updater.bin 送进 RAM
+        upd = z.read("updater.bin") if "updater.bin" in z.namelist() else None
+        if upd:
+            S["burn"]["step"] = "send ram"
+            blog(f"send ram: XMODEM 上传 updater.bin({len(upd):,}B)…")
+            if not xmodem_send(s.ser, upd, blog):
+                blog("XMODEM 未响应, 尝试直接 5C53 握手(兼容板上自带 updater)")
+            s.ser.timeout = 3.0
+        blog("115200 握手中…")
         ok = False
         for _ in range(10):
             r, _ = s.cmd(CMD_CONNECT, timeout=0.5)
