@@ -108,8 +108,12 @@ def xmodem_send(ser, data, log=print, timeout_s=12):
         d = ser.read(64)
         if d:
             if 0x43 in d:          # 'C' = CRC 模式请求
-                got_c = True
-                break
+                d2 = ser.read(64) if ser.in_waiting else b""
+                time.sleep(0.2)
+                d2 += ser.read(64) if ser.in_waiting else b""
+                if 0x43 in d2:       # 真 XMODEM 接收方会周期性重发 'C'
+                    got_c = True
+                    break
             if 0x15 in d:          # NAK = 校验和模式, 继续等 C
                 continue
     if not got_c:
@@ -176,20 +180,42 @@ def burn_worker(port, wpk_path, hi_baud):
         blog(f"wpk: {os.path.basename(wpk_path)} | {cfg['chip']} | {len(cfg['images'])} 分区")
 
         s = WqSerial(port)
+        # 官方工具等效动作: DTR 持续使能 + RTS 复位脉冲(SerialPortBase.Open/HardRest)
+        s.ser.dtr = True
+        blog("DTR 已拉住(下载模式条件), 发 RTS 复位脉冲…")
+        s.ser.rts = True
+        time.sleep(0.2)
+        s.ser.rts = False
         # 第 0 步: send ram —— 与官方工具一致, 先 XMODEM 把 updater.bin 送进 RAM
         upd = z.read("updater.bin") if "updater.bin" in z.namelist() else None
         if upd:
             S["burn"]["step"] = "send ram"
+            blog("切换到 2000000 波特率(官方工具 send ram 实际速率)")
+            s.ser.baudrate = 2000000
             blog(f"send ram: XMODEM 上传 updater.bin({len(upd):,}B)…")
-            if not xmodem_send(s.ser, upd, blog):
-                blog("XMODEM 未响应, 尝试直接 5C53 握手(兼容板上自带 updater)")
+            sent = False
+            for pulse in range(4):            # 每轮等 'C' 8 秒, 不行再补一次 RTS 脉冲
+                if xmodem_send(s.ser, upd, blog, timeout_s=8):
+                    sent = True
+                    break
+                s.ser.rts = True
+                time.sleep(0.2)
+                s.ser.rts = False
+                blog(f"({pulse + 1}/4) 再补一次 RTS 复位脉冲…")
+            s.ser.baudrate = 115200
             s.ser.timeout = 3.0
-        blog("115200 握手中…")
+            if not sent:
+                blog("XMODEM 未响应, 尝试直接 5C53 握手(兼容板上自带 updater)")
         ok = False
-        for _ in range(10):
-            r, _ = s.cmd(CMD_CONNECT, timeout=0.5)
-            if r == 0:
-                ok = True
+        for bd in (115200, 2000000):
+            s.ser.baudrate = bd
+            blog(f"{bd} 握手中…")
+            for _ in range(8):
+                r, _ = s.cmd(CMD_CONNECT, timeout=0.5)
+                if r == 0:
+                    ok = True
+                    break
+            if ok:
                 break
         if not ok:
             blog("✗ 握手失败:芯片无应答(未进下载模式/接线/串口不对)")
