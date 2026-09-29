@@ -98,7 +98,7 @@ def crc16_xmodem(data, crc=0):
 
 
 def xmodem_send(ser, data, log=print, timeout_s=12):
-    """XMODEM-CRC 发送(芯片=接收方发'C'): 把 updater 传进 RAM。返回 True/False"""
+    """XMODEM-1K(CRC) 发送(芯片=接收方发'C'): 官方 xmodem1k, STX+1024B 块"""
     import time as _t
     ser.timeout = 1.0
     deadline = _t.time() + timeout_s
@@ -139,7 +139,7 @@ def xmodem_send(ser, data, log=print, timeout_s=12):
             log(f"块 {block_no} 重试 10 次无 ACK")
             return False
         block_no = (block_no + 1) & 0xFF
-        i += 128
+        i += 1024
         if block_no % 16 == 0:
             log(f"  已传 {i:,}/{len(data):,} 字节")
     for _ in range(10):
@@ -180,21 +180,30 @@ def burn_worker(port, wpk_path, hi_baud):
         blog(f"wpk: {os.path.basename(wpk_path)} | {cfg['chip']} | {len(cfg['images'])} 分区")
 
         s = WqSerial(port)
-        # 官方 SerialPortBase.Open/HardRest: DTR 持续拉住 + RTS 复位脉冲
+        # 顺序重排: 先 2M 就位再复位, 复位后第一时间监听(官方 HardRest 后芯片立即说话)
         s.ser.dtr = True
-        blog("DTR 拉住 + RTS 复位脉冲…")
+        s.ser.baudrate = 2000000
+        blog("2M 就位, DTR 拉住, 发 RTS 复位脉冲并立即监听…")
+        s.ser.reset_input_buffer()
         s.ser.rts = True
         time.sleep(0.2)
         s.ser.rts = False
-        time.sleep(0.3)
-        # 官方 FWUpdateReset: 115200 下 CHIP_RESET 连发 3 次, 间隔 20ms
-        blog("FWUpdateReset: CHIP_RESET x3 @115200 …")
-        for _ in range(3):
-            s.send(CMD_CHIP_RESET)
-            time.sleep(0.02)
-        time.sleep(0.5)
+        # 复位后立即抓 2 秒原始字节(诊断: 芯片复位后到底说什么)
+        t0 = time.time(); first = b""
+        while time.time() - t0 < 2.0:
+            d = s.ser.read(1024)
+            if d: first += d
+        blog(f"复位后 2 秒收到 {len(first)}B: {first[:80].hex()}" + (" | " + first[:60].decode('utf-8','replace') if first else ""))
+        if b"WQ Updater ready" in first:
+            blog("✓✓ 检测到 updater 横幅! 芯片已在下载模式")
         # 第 0 步: send ram —— 与官方工具一致, 先 XMODEM 把 updater.bin 送进 RAM
-        upd = z.read("updater.bin") if "updater.bin" in z.namelist() else None
+        here = os.path.dirname(os.path.abspath(__file__))
+        loader_path = os.path.join(here, "fw_updater_core0.bin")
+        if os.path.exists(loader_path):
+            upd = open(loader_path, "rb").read()
+            blog("使用官方 loader fw_updater_core0.bin")
+        else:
+            upd = z.read("updater.bin") if "updater.bin" in z.namelist() else None
         if upd:
             S["burn"]["step"] = "send ram"
             blog("切换到 2000000 波特率(官方工具 send ram 实际速率)")
