@@ -62,3 +62,20 @@ int8 版——float 路线不用它,用 matXvec+vec 激活组合。性能表里�
 - hifi4/hifi5 内核同名目录并存,拷贝时**只取 hifi5**
 - NNLib 许可:随 XNNC SDK 分发,限 Cadence Xtensa 核使用(与 TFLM SDK 同源的宽松条款,
   仓库已有先例);不入公开仓库,集成时从 XNNC 包取
+
+## 6. GCC 编译 NNLib 的实测结论(2026-09-29,重要)
+
+用 xtensa-wuqi-elf-gcc 12.2 + RI-2020.4 的 cstub 头实测编译 hifi5 f32 内核:
+
+| 实验 | 结果 |
+|---|---|
+| 加 `-DCOMPILER_XTENSA=1` 绕过编译器检查 | ✅ 通过(xa_nn_common.h 的 #error 门) |
+| dot_prod/conv1d_std/pointwise_f32 | ✅ 可编 |
+| matXvec/matmul/depthwise_f32 | ❌ XCC 向量字面量转型(`(xtfloatx2)0.0f`)GCC 不认 |
+| **cstub 本质** | ❌ **C 模拟层**——MADD_SX2 等指令的实现是查表+位操作仿真(为 x86 功能仿真设计),**编进去也不会快,反而更慢** |
+| GCC 汇编器认 TIE/FPU 指令 | ❌ f 寄存器/madd.s 均不认(工具链按无 FPU 通用配置构建) |
+
+**定论:NNLib 快速版只能由 xt-clang(license 环境)编译——真 TIE 指令只有 XCC/xt-clang
+代码生成器会发射。GCC 侧的天花板=朴素 C 软浮点(即 B 包)。**
+include 路径备忘(供 xt-clang 集成参考):nnlib/src/include(+ /nnlib)、algo/common/include、
+algo/ndsp/hifi5/include、algo/kernels/basic/hifi5、RI-2020.4 wq_hifi5_asic/src/cstub。
