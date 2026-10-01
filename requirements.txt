@@ -4,3 +4,5 @@ soundfile
 pytest
 setuptools<81
 webrtcvad
+kaldiio
+kaldi-native-fbank
