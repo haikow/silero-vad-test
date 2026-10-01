@@ -74,7 +74,7 @@ python vad_realtime.py --gate v4  # 波形门控改用 v4/int8 概率
 
 ## 自动化测试平台 (CI)
 
-push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-09-22 起 69 条)。
+push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-10-01 起 87 条)。
 **run 页面可见每个用例的 pass/fail**: 打开某次 Actions run -> 摘要区有按用例的结果表格,
 下方 Annotations 逐条列出用例名; 摘要区还有 **VAD 场景指标总览表**(两模型各场景实测值,
 关键对比速览在表头, `ci/render_metrics.py` 本地可随时打印); `pytest-report-*.xml` 工件含完整报告,
@@ -98,6 +98,7 @@ push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-09-22 起 
 | 场景矩阵 (20) | 电平矩阵(peak 0.05~0.8) / 合成噪声误报(白粉褐 x2 强度) / SNR 阶梯(20/10/5dB, 按缩放后语音 RMS 定标) / 噪声零误触发集成 | 素材从已提交语音+种子噪声现场合成, 零新增文件; 阈值按 2026-09-21 实测留余量 |
 | 咖啡馆 babble (11) | 真实咖啡馆人声噪声: 裸噪声四件套误触发率 + 咖啡馆噪声下 SNR(10/5/0dB) 检出 | int8 误触发 0 段/60s、0dB SNR 检出覆盖 98% 为产品断言; uint8 被 babble 迷惑(9 段/60s)为特征化锁定 |
 | 雨声场景 (6) | 雨打树叶+采菌脆响误报 + 雨中轻声旁白(~-10dB SNR)检出/漏检 | 两模型雨声 0 误触发; int8 检出旁白 5 段/覆盖 55%(产品断言), uint8 整体漏检(特征化: 低SNR假阴性) |
+| MUSAN 真实素材 (18) | 6 噪声(106 文件全库扫描选点, 覆盖误报分布各层) + 古典/电子音乐 + LibriVox 朗读 sanity; int8 产品断言(噪声≤1段/件, 均值帧误报≤10%) + WebRTC/FireRed/uint8 特征化 | MUSAN=openslr.org/17, 142h(music42+speech60+noise930件); 扫描分布: WebRTC 89~95%文件误触发, FireRed 26%, int8 21%, uint8 14%(全场最低, 高查准画像再证) |
 
 场景实测结论 (Mac M3, ORT CPU, 种子固定):
 
@@ -137,6 +138,27 @@ push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-09-22 起 
 +Fbank/CMVN 特征管线, 不改变"固件用 Silero v4"的选型; 原厂 WebRTC 各维度垫底或失控。
 注: WebRTC 为开源同源代理结论(真库可用本地 xt-run 复核); FireRed 判定与 Silero 在固件
 真实录音上曾完全一致(2026-10-01 评估), 本表差异来自更苛刻的合成/真实噪声场景。
+
+### MUSAN 真实素材 (2026-10-01 接入, ci/musan_sweep.py + tests/test_musan.py)
+
+MUSAN(openslr.org/17, 142h: music 42h + speech 60h + noise 930 件, CC-BY)是 VAD/降噪
+最常用的噪声混音库。取材: 本地全库扫描 106/843 个噪声文件(每 8 取 1)跑 7 引擎, 按
+**逐文件触发矩阵**选 6 个代表点(全免疫/仅WebRTC/WebRTC+FireRed/WebRTC+int8/WebRTC+uint8/
+全员中招) + 古典/电子音乐各 60s + LibriVox 朗读 60s 入 test_fixtures (~10MB)。
+
+全库扫描分布 (噪声 106 件 × 60s, 四件套判定):
+
+| 引擎 | 触发文件占比 | 帧误报均值 | 中位 | p95 |
+|---|---|---|---|---|
+| WebRTC(0~3档) | **89~95%** | 0.65~0.81 | 0.70~0.91 | 1.00 |
+| FireRed | 26% | 0.085 | 0.005 | **0.428**(尾部失控) |
+| silero-int8 | 21% | 0.056 | 0.000 | 0.293 |
+| silero-uint8 | **14%** | 0.031 | 0.000 | 0.168 |
+
+要点: ① WebRTC 在宽噪声谱上彻底失控(与咖啡馆/雨声一致); ② **uint8 触发率全场最低**——
+"高查准、宁漏不误报"画像在 100+ 真实噪声上再证; ③ FireRed 中位很好但 p95 尾部有失控文件;
+④ int8 兼顾(21%, 检出全面领先)。电子乐(jamendo)是神经网络系共同软肋(常含人声/节拍):
+FireRed 7 段 / int8 2 段 / uint8 5 段。本地重跑: `python ci/musan_sweep.py --stride 8`。
 
 本地跑: `pytest tests/ -v` (模型先就位); 新增用例放 `tests/`, fixtures 在 `conftest.py` (推理只算一次, 全组共享)。
 

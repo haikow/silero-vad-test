@@ -197,6 +197,60 @@ def rain_speech_stats(runners):
     return stats
 
 
+# ---------- MUSAN 真实素材 (test_musan.py) ----------
+MUSAN_NOISE_FIXTURES = sorted((BASE / "test_fixtures").glob("musan_noise_*.wav"))
+MUSAN_MUSIC_FIXTURES = sorted((BASE / "test_fixtures").glob("musan_music_*.wav"))
+MUSAN_SPEECH_FIXTURE = BASE / "test_fixtures" / "musan_speech_librivox_60s.wav"
+
+
+@pytest.fixture(scope="session")
+def musan_engines():
+    """全部对比引擎 (WebRTC 0-3 / FireRed / silero-int8/uint8), session 级只建一次"""
+    from ci.musan_sweep import engines
+    return engines()
+
+
+def _fourpiece(run_fn, audio, **kw):
+    """跑单引擎并返回 (帧误报率, 四件套段数); kw 覆盖阈值/迟滞"""
+    probs, shift_s, _flen, thr, st, en = run_fn(audio)
+    s = SpeechSegmenter_(start=st, end=en, window_s=shift_s)
+    s.feed(probs)
+    return float((probs >= thr).mean()), len(s.final_segments())
+
+
+from vad_decision import SpeechSegmenter as SpeechSegmenter_  # noqa: E402
+
+
+@pytest.fixture(scope="session")
+def musan_metrics(musan_engines):
+    """MUSAN 聚合指标: 噪声/音乐平均帧误报率与总段数, 朗读检出覆盖 (写进指标表)"""
+    metrics = {}
+    for label, files in (("musan/noise", MUSAN_NOISE_FIXTURES),
+                         ("musan/music", MUSAN_MUSIC_FIXTURES)):
+        agg = {}
+        for name, run in musan_engines:
+            fps, segs = [], 0
+            for f in files:
+                audio, sr = sf.read(f, dtype="float32")
+                fp, n = _fourpiece(run, audio)
+                fps.append(fp); segs += n
+            agg[name] = {"fp_mean": round(sum(fps) / len(fps), 4),
+                         "segments": segs}
+        metrics[label] = agg
+        sa.METRICS["scenarios"][label] = agg
+
+    audio, sr = sf.read(MUSAN_SPEECH_FIXTURE, dtype="float32")
+    speech_cov = {}
+    for name, run in musan_engines:
+        probs, shift_s, flen, thr, _st, _en = run(audio)
+        c = np.arange(len(probs)) * shift_s + flen / 2
+        m = (c >= 2.0) & (c < len(audio) / SAMPLE_RATE - 2.0)
+        speech_cov[name] = round(float((probs[m] >= thr).mean()), 4)
+    metrics["musan/speech"] = speech_cov
+    sa.METRICS["scenarios"]["musan/speech"] = speech_cov
+    return metrics
+
+
 def pytest_sessionfinish(session, exitstatus):
     """把场景指标落盘为 CI 工件 (失败不影响测试结论; 为将来固件 HIL 对比预埋)"""
     if not sa.METRICS["scenarios"]:

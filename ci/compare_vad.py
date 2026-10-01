@@ -164,6 +164,24 @@ def main():
     print("\n注: 裸噪声行 = 帧级误报率/四件套段数(连续误开时段数偏低, 看帧级率); 其余为区域内覆盖率")
     print("阈值: WebRTC=自身判定; FireRed=0.6(其概率软校准: 噪声~0.50/语音~0.73, 默认 0.5 下噪声全过线); Silero=0.5")
 
+    # ---- MUSAN 真实素材区块 (fixture 由 tests/test_musan.py 的扫描标定选出) ----
+    if all(k in ours for k in ("musan/noise", "musan/music", "musan/speech")):
+        order = [n for n, _ in ENGINES] + ["silero-int8", "silero-uint8"]
+        print("\n" + "=" * 100)
+        print("MUSAN 真实素材 (ci/musan_sweep.py 全库扫描 106/843 选点;"
+              " 分布: WebRTC 89~95% 文件误触发 / FireRed 26% / int8 21% / uint8 14%)")
+        print("=" * 100)
+        for label, title in (("musan/noise", "噪声 6 件 误报均值/总段数:"),
+                             ("musan/music", "音乐 2 件 误报均值/总段数:")):
+            d = ours[label]
+            cells = "  ".join(f"{n}={d[n]['fp_mean']:.0%}/{d[n]['segments']}段"
+                              for n in order if n in d)
+            print(f"{title:<22}{cells}")
+        sp = ours["musan/speech"]
+        cells = "  ".join(f"{n}={sp[n]:.0%}" for n in order
+                          if isinstance(sp.get(n), (int, float)))
+        print(f"{'LibriVox 朗读检出覆盖:':<22}{cells}")
+
 
 if __name__ == "__main__":
     main()
