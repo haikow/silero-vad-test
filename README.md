@@ -74,7 +74,7 @@ python vad_realtime.py --gate v4  # 波形门控改用 v4/int8 概率
 
 ## 自动化测试平台 (CI)
 
-push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-10-01 起 87 条)。
+push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-10-01 起 96 条)。
 **run 页面可见每个用例的 pass/fail**: 打开某次 Actions run -> 摘要区有按用例的结果表格,
 下方 Annotations 逐条列出用例名; 摘要区还有 **VAD 场景指标总览表**(两模型各场景实测值,
 关键对比速览在表头, `ci/render_metrics.py` 本地可随时打印); `pytest-report-*.xml` 工件含完整报告,
@@ -98,6 +98,7 @@ push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-10-01 起 
 | 场景矩阵 (20) | 电平矩阵(peak 0.05~0.8) / 合成噪声误报(白粉褐 x2 强度) / SNR 阶梯(20/10/5dB, 按缩放后语音 RMS 定标) / 噪声零误触发集成 | 素材从已提交语音+种子噪声现场合成, 零新增文件; 阈值按 2026-09-21 实测留余量 |
 | 咖啡馆 babble (11) | 真实咖啡馆人声噪声: 裸噪声四件套误触发率 + 咖啡馆噪声下 SNR(10/5/0dB) 检出 | int8 误触发 0 段/60s、0dB SNR 检出覆盖 98% 为产品断言; uint8 被 babble 迷惑(9 段/60s)为特征化锁定 |
 | 雨声场景 (6) | 雨打树叶+采菌脆响误报 + 雨中轻声旁白(~-10dB SNR)检出/漏检 | 两模型雨声 0 误触发; int8 检出旁白 5 段/覆盖 55%(产品断言), uint8 整体漏检(特征化: 低SNR假阴性) |
+| 公开数据集 (9) | LibriSpeech test-clean 两位真实说话人 62s session 检出 sanity + openslr28 RIR 混响(仿真小房间500ms/真实大房间1s)检出 | int8 覆盖 ≥65%/≥60%(产品断言); **混响几乎不伤 VAD**(int8 73/77% vs 干净 72%, 尾音填谷效应——与 ASR 相反), 全引擎混响不崩 |
 | MUSAN 真实素材 (18) | 6 噪声(106 文件全库扫描选点, 覆盖误报分布各层) + 古典/电子音乐 + LibriVox 朗读 sanity; int8 产品断言(噪声≤1段/件, 均值帧误报≤10%) + WebRTC/FireRed/uint8 特征化 | MUSAN=openslr.org/17, 142h(music42+speech60+noise930件); 扫描分布: WebRTC 89~95%文件误触发, FireRed 26%, int8 21%, uint8 14%(全场最低, 高查准画像再证) |
 
 场景实测结论 (Mac M3, ORT CPU, 种子固定):

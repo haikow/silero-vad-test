@@ -102,6 +102,12 @@ def scenarios():
     items.append(("雨声/裸噪声误触发", rain, None, "trig"))
     rs = load("rain_speech_16k.wav")
     items.append(("雨中旁白/检出", rs, (4.9, 34.4), "rate"))
+    for name in ("libri_spk_a_60s.wav", "libri_spk_b_60s.wav"):
+        a = load(name)
+        items.append((f"Libri/{name[10]}检出", a, (0.5, len(a) / 16000 - 0.5), "rate"))
+    for name in ("reverb_small_room.wav", "reverb_large_room.wav"):
+        a = load(name)
+        items.append((f"混响{name[7:12]}/检出", a, (0.5, len(a) / 16000 - 0.5), "rate"))
     return items
 
 
@@ -124,6 +130,15 @@ def silero_cells(name, ours):
                 f"{ours['rain/speech']['uint8']['coverage']:.0%}")
     if name.startswith("雨声/裸"):
         return (f"{ours['rain/noise']['int8']['triggers']}段", "0段")
+    if name.startswith("Libri/"):
+        key = f"ds/libri_spk_{name[6]}_60s.wav"
+        if key in ours:
+            return (f"{ours[key]['silero-int8']:.0%}", f"{ours[key]['silero-uint8']:.0%}")
+    if name.startswith("混响"):
+        room = name[2:7]  # small / large
+        key = f"ds/reverb_{room}_room.wav"
+        if key in ours:
+            return (f"{ours[key]['silero-int8']:.0%}", f"{ours[key]['silero-uint8']:.0%}")
     if name.startswith("smoke/语音"):
         return (f"{ours['snr/20dB']['int8']['coverage']:.0%}", "")
     if "电平" in name:

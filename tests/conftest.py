@@ -251,6 +251,32 @@ def musan_metrics(musan_engines):
     return metrics
 
 
+# ---------- 公开数据集场景: LibriSpeech 多说话人 + RIR 混响 (test_datasets.py) ----------
+DS_SPEECH_FIXTURES = ["libri_spk_a_60s.wav", "libri_spk_b_60s.wav"]
+DS_REVERB_FIXTURES = ["reverb_small_room.wav", "reverb_large_room.wav"]
+
+
+@pytest.fixture(scope="session")
+def ds_metrics(musan_engines):
+    """LibriSpeech/RIR 场景的各引擎检出覆盖 (全程减 0.5s 热身, 写进指标表)"""
+    metrics = {}
+    for label, names in (("ds/libri", DS_SPEECH_FIXTURES), ("ds/reverb", DS_REVERB_FIXTURES)):
+        agg = {}
+        for name in names:
+            audio, sr = sf.read(BASE / "test_fixtures" / name, dtype="float32")
+            assert sr == SAMPLE_RATE
+            entry = {}
+            for ename, run in musan_engines:
+                probs, shift_s, flen, thr, _st, _en = run(audio)
+                c = np.arange(len(probs)) * shift_s + flen / 2
+                m = c >= 0.5
+                entry[ename] = round(float((probs[m] >= thr).mean()), 4)
+            agg[name] = entry
+            sa.METRICS["scenarios"][f"ds/{name}"] = entry
+        metrics[label] = agg
+    return metrics
+
+
 def pytest_sessionfinish(session, exitstatus):
     """把场景指标落盘为 CI 工件 (失败不影响测试结论; 为将来固件 HIL 对比预埋)"""
     if not sa.METRICS["scenarios"]:
