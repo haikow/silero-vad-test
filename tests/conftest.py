@@ -277,6 +277,18 @@ def ds_metrics(musan_engines):
     return metrics
 
 
+# ---------- FLEURS-VAD 式官方协议 (test_official_protocol.py) ----------
+
+
+@pytest.fixture(scope="session")
+def fleurs_metrics():
+    """官方协议指标: {stem: {engine: {auc, default, best_thr, best}}} (缓存进指标表)"""
+    from ci.official_protocol import evaluate_sessions
+    agg = evaluate_sessions()
+    sa.METRICS["scenarios"]["fleurs_like"] = agg
+    return agg
+
+
 def pytest_sessionfinish(session, exitstatus):
     """把场景指标落盘为 CI 工件 (失败不影响测试结论; 为将来固件 HIL 对比预埋)"""
     if not sa.METRICS["scenarios"]:
