@@ -2,7 +2,9 @@ onnxruntime>=1.17
 numpy
 soundfile
 pytest
-setuptools<81
+setuptools>=68,<81
 webrtcvad
 kaldiio
 kaldi-native-fbank
+scipy
+./third_party/fsmn-vad

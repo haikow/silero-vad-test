@@ -25,6 +25,85 @@ from vad_decision import SpeechSegmenter                          # noqa: E402
 
 AGGRESSIVENESS = (0, 1, 2, 3)
 
+# ---------- 第三方引擎: TEN VAD / FSMN-VAD / rVAD (榜单 Recommended/Popular 全量) ----------
+_THIRD = BASE / "third_party"
+
+# TEN VAD (TEN framework, Apache-2.0): 官方 macOS framework, 16ms hop, 概率输出
+if (_THIRD / "ten-vad" / "include" / "ten_vad.py").exists():
+    sys.path.insert(0, str(_THIRD / "ten-vad" / "include"))
+
+
+def ten_engine():
+    from ten_vad import TenVad
+    hop = 256  # 16ms @16k
+
+    def run(audio):
+        v = TenVad(hop_size=hop, threshold=0.5)  # 每流新建 (库内含状态)
+        a16 = (np.clip(audio, -1, 1) * 32767).astype("<i2")
+        n = len(a16) // hop
+        probs = np.array([v.process(a16[i * hop:(i + 1) * hop])[0] for i in range(n)])
+        return probs, hop / 16000, hop / 16000, 0.5, 0.6, 0.35
+    return run
+
+
+# FSMN-VAD (Alibaba FSMN, Apache-2.0; lovemefan ONNX 移植 MIT): 离线段输出 -> 10ms 二值网格
+def fsmn_engine():
+    from fsmnvad import FSMNVad
+    import tempfile
+    v = FSMNVad(online=False)
+
+    def run(audio):
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / "in.wav"
+            sf.write(wav, (np.clip(audio, -1, 1) * 32767).astype("<i2"), 16000, subtype="PCM_16")
+            try:
+                segs_ms = v.segments_offline(str(wav))
+            except IndexError:
+                # 其后处理在纯静音/无检出素材上会索引空列表 (上游 bug), 语义上=无检出
+                segs_ms = []
+        n = int(len(audio) / 16000 / 0.01)
+        dec = np.zeros(n, np.float32)
+        for s, e in segs_ms or []:
+            dec[int(s / 10):max(int(s / 10), int(e / 10))] = 1.0
+        return dec, 0.01, 0.01, 0.5, 0.6, 0.35
+    return run
+
+
+# rVAD-fast 2.0 (Tan & Sarkar, 官方 Python 移植, GPL): 子进程跑, 10ms 二值标签
+def rvad_engine():
+    import subprocess
+    import tempfile
+    script = _THIRD / "rvad" / "rVAD_fast.py"
+
+    def run(audio):
+        with tempfile.TemporaryDirectory() as td:
+            wav = Path(td) / "in.wav"
+            sf.write(wav, (np.clip(audio, -1, 1) * 32767).astype("<i2"), 16000, subtype="PCM_16")
+            out = Path(td) / "out.label"
+            subprocess.run([sys.executable, str(script), str(wav), str(out)],
+                           check=True, capture_output=True)
+            dec = np.atleast_1d(np.loadtxt(out)).astype(np.float32)
+        return dec, 0.01, 0.025, 0.5, 0.6, 0.35
+    return run
+
+
+def _optional(name, factory):
+    """引擎可选挂载: 第三方依赖缺失时跳过并提示, 不拖垮整个对比"""
+    try:
+        eng = factory()
+        eng(np.zeros(16000, np.float32))  # 冒烟
+        return (name, eng)
+    except Exception as e:
+        print(f"[compare_vad] 跳过 {name}: {type(e).__name__}: {e}")
+        return None
+
+
+EXTRA_ENGINES = [e for e in (
+    _optional("TEN-VAD", ten_engine),
+    _optional("FSMN-VAD", fsmn_engine),
+    _optional("rVAD-fast", rvad_engine),
+) if e]
+
 
 # ---------------- 引擎适配层 ----------------
 # 统一返回 (概率数组, 帧移秒, 帧长秒, 覆盖率阈值, 四件套 start, 四件套 end)
@@ -56,7 +135,8 @@ def firered_engine():
     return run
 
 
-ENGINES = [(f"WRTC-{a}", webrtc_engine(a)) for a in AGGRESSIVENESS] + [("FireRed", firered_engine())]
+ENGINES = ([(f"WRTC-{a}", webrtc_engine(a)) for a in AGGRESSIVENESS]
+           + [("FireRed", firered_engine())] + EXTRA_ENGINES)
 
 
 # ---------------- 统一评估: 覆盖率 / 四件套误触发段 ----------------

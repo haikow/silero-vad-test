@@ -141,6 +141,26 @@ push / PR 自动触发两个 job, 各跑同一套 pytest 用例 (2026-10-02 起 
 注: WebRTC 为开源同源代理结论(真库可用本地 xt-run 复核); FireRed 判定与 Silero 在固件
 真实录音上曾完全一致(2026-10-01 评估), 本表差异来自更苛刻的合成/真实噪声场景。
 
+### 榜单全量扩展 (2026-10-03): linan2/VAD-paper-and-code "Recommended/Popular" 全部纳入
+
+新增 3 引擎(全部经同口径场景矩阵): **TEN-VAD**(TEN framework 官方 macOS framework,
+Apache-2.0, vendored third_party/ten-vad) / **FSMN-VAD**(阿里 FSMN, lovemefan ONNX 移植,
+MIT+Apache-2.0, vendored third_party/fsmn-vad, 修其上游"无检出索引空列表"bug) /
+**rVAD-fast 2.0**(Tan & Sarkar 经典法, 官方 Python 移植, GPL, third_party/rvad)。
+跳过: VAD_MATLAB(需 MATLAB 环境)、SpeechBrain VAD(torch recipe, 未纳入)。
+
+全表结论(详见 run 页摘要 / `python ci/compare_vad.py`):
+
+- **FSMN-VAD 是最强新选手**: 咖啡馆 babble 0 段(真零误报, 补丁后合法)、雨声 0 段、
+  电平全稳(91% 恒定)、干净检出 91-97%、混响 97% —— 多项与 int8 并列或更高;
+  短板是深噪声 SNR(咖啡馆 0dB 检出 62% vs int8 98%)。离线段输出(非帧级概率)
+- **TEN-VAD**: 误报控制优秀(噪声 1%/雨声 1%/0 段, babble 5 段好于 FireRed 13 段),
+  但检出平平(74-87%)、雨中轻声 36% 几乎垫底
+- **rVAD-fast**(经典法): 干净场景可用(75%/0 误报), babble 89%/雨声 67% 误报、
+  SNR<10dB 崩(0dB 0%) —— 实测复证"经典方法被神经方法替代"的行业结论
+- 部署选型结论不变: **int8 综合第一**(检出+鲁棒性全面); FSMN 值得作为备选跟进
+  (其在线流式版值得后续按帧级评估)
+
 ### 官方协议复现与基线 (2026-10-02, ci/official_protocol.py)
 
 官方榜单 = FLEURS-VAD-102(FLEURS test 9443 文件, 朗读+句间停顿, 二值标注, 标注集
