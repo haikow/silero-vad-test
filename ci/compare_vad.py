@@ -69,6 +69,31 @@ def fsmn_engine():
     return run
 
 
+# FSMN-VAD 在线流式 (真流式: 200ms 块 + cache 递传, 前端自带流式 fbank) -> 10ms 二值网格
+def fsmn_online_engine(chunk_ms=200):
+    from fsmnvad import FSMNVadOnline
+    ch = int(16000 * chunk_ms / 1000)
+
+    def run(audio):
+        v = FSMNVadOnline()  # 每流新建 (前端累积波形 + FSMN cache 均有状态)
+        cache, segs = [], []
+        n = len(audio) // ch
+        for i in range(n):
+            try:
+                seg, cache = v.segments_online(audio[i * ch:(i + 1) * ch],
+                                               in_cache=cache, is_final=(i == n - 1))
+            except IndexError:
+                seg = []  # 同上游空列表 bug
+            if seg:
+                segs += list(seg)
+        n10 = int(len(audio) / 16000 / 0.01)
+        dec = np.zeros(n10, np.float32)
+        for s, e in segs:
+            dec[int(s / 10):max(int(s / 10), int(e / 10))] = 1.0
+        return dec, 0.01, 0.01, 0.5, 0.6, 0.35
+    return run
+
+
 # rVAD-fast 2.0 (Tan & Sarkar, 官方 Python 移植, GPL): 子进程跑, 10ms 二值标签
 def rvad_engine():
     import subprocess
@@ -100,7 +125,8 @@ def _optional(name, factory):
 
 EXTRA_ENGINES = [e for e in (
     _optional("TEN-VAD", ten_engine),
-    _optional("FSMN-VAD", fsmn_engine),
+    _optional("FSMN-off", fsmn_engine),
+    _optional("FSMN-on", fsmn_online_engine),
     _optional("rVAD-fast", rvad_engine),
 ) if e]
 
