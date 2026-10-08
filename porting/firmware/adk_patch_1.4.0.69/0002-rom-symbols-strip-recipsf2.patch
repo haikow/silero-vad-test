@@ -1,0 +1,22 @@
+diff -ruN --exclude=*.bak wqcore/chipset/soc/hornet/rom_syms/1.0/xt/rom_image.ld wqcore/chipset/soc/hornet/rom_syms/1.0/xt/rom_image.ld
+--- wqcore/chipset/soc/hornet/rom_syms/1.0/xt/rom_image.ld	2026-06-24 11:30:02
++++ wqcore/chipset/soc/hornet/rom_syms/1.0/xt/rom_image.ld	2026-10-08 16:04:25
+@@ -328,7 +328,6 @@
+ __floatsidf = 0x2615f868;
+ __floatundidf = 0x2615f8a0;
+ __floatdidf = 0x2615f8b4;
+-__recipsf2 = 0x2615f940;
+ __divsf3 = 0x2615f980;
+ __mulsi3 = 0x2615fa38;
+ __umodsi3 = 0x2615fad0;
+diff -ruN --exclude=*.bak wqcore/chipset/soc/hornet/rom_syms/2.0/xt/rom_image.ld wqcore/chipset/soc/hornet/rom_syms/2.0/xt/rom_image.ld
+--- wqcore/chipset/soc/hornet/rom_syms/2.0/xt/rom_image.ld	2026-06-24 11:30:02
++++ wqcore/chipset/soc/hornet/rom_syms/2.0/xt/rom_image.ld	2026-10-08 16:04:25
+@@ -364,7 +364,6 @@
+ __floatsidf = 0x2615f228;
+ __floatundidf = 0x2615f260;
+ __floatdidf = 0x2615f274;
+-__recipsf2 = 0x2615f300;
+ __divsf3 = 0x2615f340;
+ __mulsi3 = 0x2615f3f8;
+ __umodsi3 = 0x2615f490;
