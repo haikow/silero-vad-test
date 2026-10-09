@@ -21,7 +21,7 @@
 ## 构建命令(容器内,工具链挂 /opt/wqcore)
 
 ```bash
-# 工具链: RI-2020.4 + xtensa-wuqi-elf-gcc 12.2 + riscv64 10.2(wqcore/toolchain/)
+# 工具链(当前): RI-2020.4 xt-clang(dcore) + riscv64 14.2(acore/bcore, ADK 1.4 强制) —— 详见 工具链版本表.md
 docker run --platform linux/amd64 -v <sdk>:/work -v <wqcore>:/opt/wqcore \
   -e WQCORE_TOOLCHAIN_PATH=/opt/wqcore/toolchain \
   -w /work/wq-audio/wq-adk/examples/glass wq-build:latest bash -c \
