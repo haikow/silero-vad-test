@@ -1,16 +1,18 @@
-# Silero VAD → WQ7036AC ADK 1.4.0.69 补丁包(厂商 patch 交付版)
+# Silero VAD → WQ7036AC ADK 1.4.0.69 补丁包(厂商 patch 交付版 v2)
 
-> 2026-10-08。四个补丁 + 一条挪库指令 = Silero VAD(glass-stereo-dac/7036AC 正确基线)完整集成。
-> 在 wq-audio_1.4.0.69 原始解包树上应用(与打补丁顺序无关, 但建议按编号)。
+> 2026-10-09 v2(修正版): NNLib 加速版实现 + 钩子位置修正 + DBGLOG 输出。
+> 五个补丁 + 一条挪库指令 = Silero VAD 完整集成(NNLib 内核加速, 预期单窗 <5ms)。
+> 在 wq-audio_1.4.0.69 原始解包树上按编号顺序应用。
 
 ## 应用步骤
 
 ```bash
 # 在 wq-audio 源码根目录(含 wq-adk/ 与 wqcore/ 的那一层)执行:
-patch -p0 < 0001-silero-vad-source.patch        # Silero 源码 9 文件(算法+权重+5函数封装+HIL)
-patch -p0 < 0002-rom-symbols-strip-recipsf2.patch # ROM 符号表剥离 __recipsf2(必打, 见下)
-patch -p0 < 0003-defconfig-flash-layout.patch    # 新 defconfig.silero + dcore 分区 300→400 扇区
-patch -p0 < 0004-hil-selftest-hook.patch         # [SHIL] 自检钩子(测试用, 量产可不打)
+patch -p0 < 0001-silero-vad-source.patch         # Silero 源码+NNLib头(算法/权重/5函数封装/HIL/NNLib全套头)
+patch -p0 < 0002-rom-symbols-strip-recipsf2.patch # ROM 符号表剥离 __recipsf2(必打)
+patch -p0 < 0003-defconfig-flash-layout.patch     # defconfig.silero + dcore 分区 300→400 扇区
+patch -p0 < 0004-hil-selftest-hook.patch          # [SHIL] 自检钩子(量产可不打)
+patch -p0 < 0005-nnlib-include-paths.patch        # SConscript 加 NNLib 头文件 -I 路径
 
 # 挪出原厂 WebRTC VAD 闭源库(等价禁用; 移回即回退):
 mv wq-adk/components/audio_algorithm/lib/wq_sw_vad \
@@ -22,32 +24,31 @@ mv wq-adk/components/audio_algorithm/lib/wq_sw_vad \
 ```bash
 cd wq-adk/examples/glass
 scons --defconfig=config/7036AC/defconfig.silero && scons -j16
-# 产物: build/7036AC/glass-silero/*.wpk
 ```
 
-前置: xt-clang(license 环境) + **RISC-V GCC 14.2**(1.4 必须, 10.2 会在 riscv_tools.py 失败;
-wq-toolchain-dl GitLab 有) + dcore 镜像约 1.2MB(400 扇区分区)。
+前置: xt-clang(license 环境) + **RISC-V GCC 14.2**(wq-toolchain-dl GitLab 有)。
+**NNLib 内核不需要源码**——SDK 自带同核预编译 `lib/xa_nnlib/libxa_nnlib.a`, 所需
+9 个 f32 符号全齐(conv1d_std/matmul/matXvec/dot_prod/激活/elm_add), 补丁只接头文件。
 
 ## 各补丁说明
 
-| 补丁 | 内容 | 为什么 |
+| 补丁 | 内容 | 要点 |
 |---|---|---|
-| 0001 | processor/src|inc 新增 9 文件 | Silero v4 纯 C99 float 实现; 原厂 sw_vad.c 的 5 函数接口(drop-in), processor 层零改动 |
-| 0002 | rom_syms/{1.0,2.0}/xt/rom_image.ld 删 `__recipsf2` 行 | **必打**。xt-clang 对 float 除法发射 __recipsf2; 该 ROM 地址(0x2615f940)从未被任何官方固件验证过, 链上去会零日志死机。剥离后 libgcc 自带实现(ieee754divs.o)自动顶上——不要自己写 shim 返回 1.0f/x(会拉 libgcc 除法撞 multiple definition) |
-| 0003 | defconfig.silero(新) + flash_layout.json | 总开关是 CONFIG_VAD_ENABLE(自动 select AUDIO_VAD_ENABLE/RECORDSV/RECORD_BASE), 附 RING_ALLOCATE_CFG=2(aud_sv_vad.c 硬性要求); 权重 601KB 入像需扩 dcore 分区 |
-| 0004 | entry.c 挂 wq_silero_hil_selftest | 上电 [SHIL] begin→40 窗概率→end, 配 hil_parse.py 数值验收(≤0.1); CONFIG_AUDIO_VAD_ENABLE 门控, 量产可不打或移除 |
+| 0001 | Silero 源码 5 文件 + **NNLib 全套头文件**(nnlib/目录+NatureDSP/ndsp 头+state 头) | silero_vad.c 为 NNLib 映射版: STFT=conv1d_std_f32, 1x1卷积=matmul(CHW 路径), LSTM 门=matXvec, decoder=dot_prod, 激活=vec_sigmoid/tanh**_f32_f32**(32_32 是定点别用), dwconv5 保留标量; conv1d 必须给 bias(零数组)和 p_scratch; HIL 输出用 **DBGLOG**(printf 在 1.4 是空桩!), PACE 100ms 帧间 yield |
+| 0002 | rom_image.ld 删 `__recipsf2` 行(1.0/2.0 两版) | **必打**。xt-clang 的 float 除法引用它; ROM 地址从未被官方固件验证, 剥离后 libgcc 自带实现自动顶上(不要写 shim 返回 1.0f/x, 会撞 multiple definition) |
+| 0003 | defconfig.silero + flash_layout dcore 300→400 | 总开关 CONFIG_VAD_ENABLE(自动 select AUDIO_VAD_ENABLE 等)+ RING_ALLOCATE_CFG=2(aud_sv_vad.c 硬性要求) |
+| 0004 | entry.c 挂 HIL 钩子 | **必须在 app_main_entry 之前**(它启动调度后不返回); 上电 [SHIL] 40 窗概率输出 |
+| 0005 | SConscript 加 `-I processor/inc` 和 `-I processor/inc/nnlib` | NNLib 头的内部互引需要两个路径 |
 
 ## 验证清单
 
-1. 链接产物符号: `xt-nm glass_dcore.elf | grep sv_process`(应 25 个)、`grep WebRtc` 只剩
-   WebRtcSpl_Rand*/Aec 曲线(公共工具, 非 VAD 本体)
-2. 镜像段链: `python3 validate_dcore.py <wpk里的glass_dcore.bin>` 应 PASS
-3. 上板: 三核正常 + `[SHIL]` 40 窗 → 日志发回跑 hil_parse.py(≤0.1 验收)
+1. `xt-nm glass_dcore.elf | grep sv_process`(≈26 个)、`grep xa_nn`(NNLib 内核链接)
+2. `python3 validate_dcore.py <glass_dcore.bin>` 段链 PASS
+3. 上板: 三核正常 + 无 WDT2 崩溃 + `[SHIL]` 40 窗 → hil_parse.py ≤0.1 验收
 
 ## 注意
 
-- 基线必须是 glass-stereo-dac 同代(ADK 1.4.x); 若在 ai.recorder/1.3.0.398 上打此补丁
-  **必然 rpc 断言循环**(分区/ro_cfg/核间不兼容, 2026-10 实证)
-- ro_cfg.bin 用贵司目标板原厂的(随包的 ro_cfg 与板级硬件绑定)
-- 已知无需处理: 权重文件 SV_WSEC 段属性已置空(AC 布局 XIP rodata 空间足够);
-  is_defined→defined 已改; -Wmissing-prototypes 原型已加
+- 基线必须 glass-stereo-dac 同代(ADK 1.4.x); 打在 ai.recorder/1.3 上必然 rpc 断言循环
+- ro_cfg.bin 用目标板原厂的
+- v1→v2 变更: 标量版→NNLib 版 / HIL 钩子挪到 app_main_entry 前 / printf→DBGLOG /
+  新增 0005(SConscript include) / 0001 含 NNLib 头文件

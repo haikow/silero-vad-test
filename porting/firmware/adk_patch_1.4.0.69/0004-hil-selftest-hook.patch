@@ -1,17 +1,17 @@
 --- wq-adk/components/entry/dcore/entry.c	2026-06-24 11:27:40
-+++ wq-adk/components/entry/dcore/entry.c	2026-10-08 20:23:10
-@@ -139,6 +139,14 @@
++++ wq-adk/components/entry/dcore/entry.c	2026-10-09 09:57:59
+@@ -138,6 +138,14 @@
+     wq_dma_init();
      wq_debug_init();
      wq_feat_res_init();
-     app_main_entry();
-+
 +#if defined(CONFIG_AUDIO_VAD_ENABLE)
-+    /* Silero HIL 自检: golden 音频逐窗概率 [SHIL] 输出(测试钩子, 生产可移除) */
++    /* Silero HIL 自检: golden 音频逐窗概率 [SHIL] 输出(测试钩子, 生产可移除)
++       注意: 必须在 app_main_entry 之前——它启动调度后不返回 */
 +    {
 +        extern void wq_silero_hil_selftest(void);
 +        wq_silero_hil_selftest();
 +    }
 +#endif
+     app_main_entry();
      wq_perf_monitor_enable(PERF_MALLOC_FAIL_ASSERT | PERF_CACHE_MISS);
  
- #if defined(CONFIG_PROFILE_ENABLE)

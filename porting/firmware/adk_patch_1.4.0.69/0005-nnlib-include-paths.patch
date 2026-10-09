@@ -1,0 +1,12 @@
+--- wq-adk/components/audio_algorithm/SConscript	2026-06-24 11:27:40
++++ wq-adk/components/audio_algorithm/SConscript	2026-10-09 10:51:32
+@@ -100,6 +100,9 @@
+                 alg_lib.append(os.path.join('lib', d, 'lib' + d + '.a'))
+     #inc
+     pub_inc.append(os.path.join(cwd, 'processor', 'inc'))
++    # NNLib(Silero 加速): 内核源平铺在 processor/src, 头在 processor/inc(含 nnlib/ 子目录)
++    flags += ['-I' + os.path.join(cwd, 'processor', 'inc'),
++              '-I' + os.path.join(cwd, 'processor', 'inc', 'nnlib')]  # xa_nnlib_api.h 等在 nnlib/ 内部互引
+     pub_inc.append(cwd)
+ 
+     #src
