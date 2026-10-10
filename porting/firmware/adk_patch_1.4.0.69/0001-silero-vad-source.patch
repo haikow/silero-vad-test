@@ -1,11 +1,13 @@
-# 0001-silero-vad-source.patch —— Silero VAD 全部源码/权重/头文件(新增文件, v3.1 终版)
-# v3.1(2026-10-11): 在 v3(II/KK 40窗<=0.0001) 基础上 —
-#   - STFT kernel 改 32 通道分块暂存(32KB 静态 TCM): v3 的 sv_basis 264KB 堆常驻会饿死
-#     音频 preset(preset_mem 需 216KB 连续块, KK 实测 end 后 assert/exccause 0x15)
-#   - HIL 循环显式 wq_wdt_do_feed()(II 实测连跑~17s 被咬, pacing 不保证够)
-#   - conv1d 参数重排 [OC][KH=64][ICW=4](NNLib kernel 实际 [OC][ICW_pad x KH], 直传越界)
-#   - dwconv5 内嵌 ReLU(ONNX 每块 dw->ReLU->pw) / 1x1/残差/LSTM/decoder 全标量
-#   - HIL 音频 x32768 无损量化 / pw1x1 权重读一次
+# 0001-silero-vad-source.patch —— Silero VAD 全部源码/权重/头文件(新增文件, v3.2 终版)
+# v3.2(2026-10-11): 分块 conv1d 输出布局修复 —
+#   NNLib fmt0 输出行距=out_channels(块内 n=32)≠stft 行距 258, 直写 &stft[0][oc0] 会把
+#   8 帧输出全部叠进行 0(stft[1..7] 恒零 → p 衰减到 0, MM 包实测)。
+#   修复=每块先写连续 s_cout 再按行 memcpy 回 stft。
+# v3.1: kernel 32通道分块暂存(32KB 静态 TCM, 堆零占用, preset 216KB 可共存) +
+#   HIL 循环显式 wq_wdt_do_feed()
+# 继承 v3: conv1d 参数重排 [OC][KH=64][ICW=4] / dwconv5 内嵌 ReLU / 1x1/LSTM/decoder
+#   全标量 / HIL 音频 x32768 无损 / pw1x1 权重读一次
+# 验收基线: II/KK 实测 40 窗全部 |板端-PC|<=0.0001
 # 应用: patch -p0 < 0001-silero-vad-source.patch
 
 diff -ruN a/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h b/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h
@@ -22264,7 +22266,7 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_hil_audio.h b
 diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-adk/components/audio_algorithm/processor/src/silero_vad.c
 --- a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c	1970-01-01 08:00:00
 +++ b/wq-adk/components/audio_algorithm/processor/src/silero_vad.c	2026-10-11 00:00:00
-@@ -0,0 +1,379 @@
+@@ -0,0 +1,384 @@
 +/*
 + * silero_vad_nn.c —— Silero VAD v4 的 HiFi5 NNLib 加速实现(最终版)
 + * 与 silero_vad.c 同接口(sv_process/sv_reset/sv_last_prob + sv_state_t),可直接替换编译。
@@ -22338,6 +22340,7 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +   从 flash 分 9 块流读一遍(264KB≈48ms@5.5MB/s), 堆零占用, NNLib 数学与 KK 逐位一致 */
 +#define SV_KCHUNK 32
 +static float s_kchunk[SV_KCHUNK * 256] AL16;
++static float s_cout[8 * SV_KCHUNK] AL16;   /* 块输出暂存: conv1d fmt0 行距=out_channels(n)≠stft行距258, 必须先连续落盘再拷回 */
 +
 +/* LSTM 合并偏置(Wb+Rb), 首次调用时生成 */
 +static float s_lstm_b1[256] AL16, s_lstm_b2[256] AL16;
@@ -22485,19 +22488,23 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +       修复=重排为 [OC][KH=64平面][ICW=4]: kernel[oc][k=4*kh+j] 与 pad[样本] 内存布局
 +       一字节不动, 纯参数改动; cols=4*64=256=每通道抽头数, 无填充无越界, 数学严格等价
 +       out[t][oc] = Σ_k w[oc][k]·pad[64t+k] */
-+    /* 分块流读 kernel: 每块 32 通道, memcpy 进 TCM 后算该块全部 8 帧;
-+       kernel 总流量 264KB×1 遍, 输出按 [H][C] 精确落进 stft[t][oc0..oc0+n-1] */
++    /* 分块流读 kernel: 每块 32 通道, memcpy 进 TCM 后算该块全部 8 帧。
++       注意: conv1d fmt0 输出行距=out_channels(n), 与 stft 行距 258 不同 —
++       必须先写连续 s_cout 再按行拷回(LM 实测: 直写 &stft[0][oc0] 会把 8 帧全
++       叠进行 0, stft[1..7] 恒零 → p 衰减到 0 的整轮报废) */
 +    {
 +        const float *kb = sv_feature_extractor_forward_basis_buffer;
 +        for (int oc0 = 0; oc0 < 258; ) {
 +            int n = 258 - oc0 < SV_KCHUNK ? 258 - oc0 : SV_KCHUNK;
 +            memcpy(s_kchunk, kb + (size_t)oc0 * 256, (size_t)n * 256 * sizeof(float));
-+            xa_nn_conv1d_std_f32(&stft[0][oc0], pad, s_kchunk,
++            xa_nn_conv1d_std_f32(s_cout, pad, s_kchunk,
 +                                 (FLOAT32 *)(s_zero_bias + oc0),
 +                                 176 /*input_height=704/4 平面*/, 4 /*input_width*/,
 +                                 1 /*in_ch*/, 64 /*kernel_height*/, n /*out_channels*/,
 +                                 16 /*y_stride*/, 0 /*y_padding*/, 8 /*out_height*/,
 +                                 0 /*out_data_format*/, (VOID *)s_conv1d_state);
++            for (int t = 0; t < 8; t++)
++                memcpy(&stft[t][oc0], &s_cout[t * n], (size_t)n * sizeof(float));
 +            oc0 += n;
 +        }
 +    }
