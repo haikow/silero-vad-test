@@ -23,11 +23,16 @@
 
 ## 3. 全语料判定对比(19 条 / 25384 窗)
 
-- 门控(实时 on/off)不一致: **449 窗(1.77%)**, 集中在过渡点; 11/19 条语料零翻转
+- 门控(实时 on/off)不一致: **1060 窗(4.18%)**; 10/19 条语料零翻转(噪音/古典乐/雨声/
+  冒烟全零), 差异集中在两类:
+  - **musan_noise_wrtc_u8: 611 翻转, float 1 段 vs int8 0 段** —— int8 在该噪音上
+    **不误触发**, float 有一段假触发(int8 更优)
+  - musan_music_jamendo: 254 翻转, float 5 段 10.0s 假触发 vs int8 2 段 1.8s(int8 更优)
+- 语音类(fleurs/libri)边界小碎: int8 段数略多(段内中谷跌破阈值), fleurs_a 106 翻转
 - **音乐假触发 int8 反而更好**: jamendo 纯音乐 float 误触发 5 段 10.0s, int8 仅 2 段 1.8s
 - **语音分段 int8 略碎**: fleurs_a(GT 10 段) float 12 段 / int8 14 段(段内中谷跌破阈值多分);
   边界最大差 0.6s(musan_noise_hard 的 1 个假触发段)
-- 与 CI 评分一致(int8 90.7 vs float 92.2): 误差轮廓不同、总量级相当
+- 与 CI 评分一致(int8 90.7 vs float 92.2): 误差轮廓不同、总量级相当; 判定级一致率 95.8%
 
 ## 4. 路线建议
 
@@ -44,5 +49,5 @@
 
 ## 复现
 
-```bash
-.venv/bin/python - <<'EOF'  # 或见 git 历史(对比脚本要点: VadRunner 流式 + SpeechSegmenter)
+对比脚本: [int8_vs_float32.py](int8_vs_float32.py)(VadRunner 流式 + SpeechSegmenter 判定,
+两模型同口径 19 条语料对头)。数据: golden 40 窗在 `porting/firmware/`, 语料在 `test_fixtures/`。
