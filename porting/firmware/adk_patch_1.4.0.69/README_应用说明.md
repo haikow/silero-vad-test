@@ -41,7 +41,7 @@ scons --defconfig=config/7036AC/defconfig.silero && scons -j16
 
 | 补丁 | 内容 | 要点 |
 |---|---|---|
-| 0001 | Silero 源码 9 文件(算法/权重/5函数封装/HIL/音频头+自编激活源) + **NNLib 全套头文件**(47 个) | silero_vad.c v3: STFT=conv1d_std_f32(**参数重排 176/4/1/64/258/16/8**), 1x1/残差/LSTM/decoder **全标量**, dwconv5 **内嵌 ReLU**, pw1x1 权重读一次; sv_basis() 把 kernel 暂存 TCM 堆(带回退); conv1d 必须给 bias(零数组)和 p_scratch(≥2.1KB); HIL 输出用 **DBGLOG**(printf 在 1.4 是空桩!), PACE 100ms 帧间 yield |
+| 0001 | Silero 源码 9 文件(算法/权重/5函数封装/HIL/音频头+自编激活源) + **NNLib 全套头文件**(47 个) | silero_vad.c **v3.4**: STFT=加窗 256 点基2 FFT(basis[0]=窗/行j=cos/行129+j=-sin, **无 conv1d**); LSTM 门=matXvec SIMD 一次调用 + R 暂存 TCM(W 留 flash, 带回退); 1x1 卷积=matmul SIMD(输入[T][IC]/输出[T][OC] 前后转置); dwconv5 内嵌 ReLU; 残差/decoder 标量; HIL 输出用 **DBGLOG**(printf 在 1.4 是空桩!), PACE 100ms + 显式喂狗 |
 | 0002 | rom_image.ld 删 `__recipsf2`/`vec_tanhf`/`vec_reluf`(1.0 前者, 2.0 三者) | **必打**。ROM 地址从未被官方固件验证(实测 vec_tanhf 坏 SP 崩溃); 剥离后 libgcc/自编源自动顶上(不要写 shim 返回 1.0f/x, 会撞 multiple definition) |
 | 0003 | defconfig.silero + flash_layout dcore 300→400 | 总开关 CONFIG_VAD_ENABLE(自动 select AUDIO_VAD_ENABLE 等)+ RING_ALLOCATE_CFG=2(aud_sv_vad.c 硬性要求) |
 | 0004 | entry.c 挂 HIL 钩子 | **必须在 app_main_entry 之前**(它启动调度后不返回); 上电 [SHIL] 40 窗概率输出 |
