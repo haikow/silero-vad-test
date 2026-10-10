@@ -1,5 +1,9 @@
 # libwq_silero_vad —— Silero VAD 的物奇 libwq_sw_vad 替换库
 
+> **2026-10-11 状态**: 本目录的 C 实现已完整移植上板(详见 [移植指南.md](移植指南.md)
+> §1-42, 40 窗 ≤0.0001); 厂商交付走 [adk_patch_1.4.0.69/](adk_patch_1.4.0.69/README_应用说明.md)。
+> 本 README 描述的是 PC 侧参考库(上板前的数值锚), 仍然有效并作为桌面回归工具。
+
 用纯 C99 实现 Silero VAD v4(float),对齐物奇 `libwq_sw_vad` 的 5 函数接口,
 **processor 层(wq-adk 的 sw_vad.c)零改动**,替换链接库即可把原厂 VAD(WebRTC VAD)
 换成 Silero。

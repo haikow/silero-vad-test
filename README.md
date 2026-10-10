@@ -1,6 +1,26 @@
-# Silero VAD 量化模型本地测试（uint8 vs int8）
+# Silero VAD 仓库总览
 
-目标：在 PC 上验证两个量化版 Silero VAD 的效果，为移植到 WQ7036AC 嵌入式设备做准备。
+本仓库现在包含两大部分:
+
+## 一、固件移植(WQ7036AC)—— ✅ 数值验收收官(2026-10-11)
+
+把原厂 WebRTC VAD 替换为 Silero v4(float), 物奇 7036AC HiFi5 DSP 平台:
+**40 窗逐窗概率与 PC 基准(onnxruntime)最大偏差 ≤0.0001**(验收线 0.1), 单窗 96.7ms。
+
+| 入口 | 内容 |
+|---|---|
+| [porting/firmware/移植指南.md](porting/firmware/移植指南.md) | 全程记录 §1-42(基线/工具链/逐包调试/三步优化) |
+| [porting/firmware/踩坑总结.md](porting/firmware/踩坑总结.md) | 六类坑(基线/工具链/license/打包/调试/数值) |
+| [porting/firmware/adk_patch_1.4.0.69/](porting/firmware/adk_patch_1.4.0.69/README_应用说明.md) | **厂商交付 patch 包 v3.4**(应用步骤/接口契约/验收) |
+| [porting/firmware/integration/](porting/firmware/integration/) | 验收工具链: hil_parse.py / validate_dcore.py / 金标工具 |
+| [porting/firmware/integration/wpk/](porting/firmware/integration/wpk/) | A→RR 全部验证固件包 |
+
+当前阶段: 等方案商打 patch 合入(麦克风/录音通路在他们产品工程)→ 真麦验证;
+<32ms 实时的最后一公里 = preset 重配释放 TCM(数据已备齐, 与厂商沟通中)。
+
+## 二、PC 引擎对比/测试工具(本仓库的起点)
+
+量化模型(uint8 vs int8)本地测试:
 
 ## 目录结构
 
