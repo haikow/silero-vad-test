@@ -70,3 +70,42 @@ scons --defconfig=config/7036AC/defconfig.silero && scons -j16
 - ro_cfg.bin 用目标板原厂的
 - v1→v2 变更: 标量版→NNLib 版 / HIL 钩子挪到 app_main_entry 前 / printf→DBGLOG /
   新增 0005(SConscript include) / 0001 含 NNLib 头文件
+
+## 接口契约(厂商自查清单 —— 不需要我们提供源码即可对接)
+
+我们交付的 `processor/inc/wq_sw_vad.h` 与贵司原厂 `lib/wq_sw_vad/inc/wq_sw_vad.h`
+**逐字一致**(已 diff 验证), 上层调用点零改动。五函数契约:
+
+```c
+int   wq_get_sw_vad_hd_size(void);                    /* 句柄字节数(小, 几十字节) */
+int   wq_get_sw_vad_scratch_size(void);               /* 返回 0(大缓冲为静态区) */
+void *wq_sw_vad_init(void *vad_hd, void *pscratch);   /* 返回 vad_hd */
+int   wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len);
+      /* in_data=单通道 int16 PCM, in_len=字节数(320样本=640字节/帧);
+         内部攒满 512 样本推理一次(Silero v4 窗长);
+         返回 1=所在窗概率≥WQ_SILERO_THRESHOLD(命中), 0=未命中 */
+void  wq_get_sw_vad_lib_version(char *version_string);
+```
+
+- **返回值语义**: 贵司 `processor/src/sw_vad.c` 把返回值当"本帧命中"做迟滞
+  (continue_hit_cnt/continue_stop_cnt)——语义与原厂一致, 该层零改动
+- **阈值调节**: `processor/inc/wq_silero_vad.h` 的 `WQ_SILERO_THRESHOLD`(默认 0.5);
+  逐窗概率另有 `[SVs]7-done p=` 日志可观测(量产可关)
+- **include**: 挪库后 `wq_sw_vad.h` 由 `processor/inc` 提供(0005 的 -I 保证)
+
+## 贵司工程与本补丁基线(1.4.0.69)不同时
+
+1. **0001 纯新增文件**(56 个), 任何树都能打; 0002/0003/0004/0005 每个仅几行,
+   patch 打不上时按 reject 手工对齐即可
+2. **贵司产品 defconfig 必须包含**(已验证组合):
+   ```
+   CONFIG_VAD_ENABLE=y              # VAD 总开关(自动 select AUDIO_VAD_ENABLE 等)
+   CONFIG_RING_ALLOCATE_CFG=2       # 或 3, aud_sv_vad.c 硬性要求
+   CONFIG_XT_TOOLCHAIN_XT_CLANG=y   # dcore 必须 xt-clang
+   CONFIG_RISCV_TOOLCHAIN_GCC_VERSION_14_2_0=y
+   ```
+3. **flash_layout**: dcore 分区 ≥400 扇区(1.6MB; dcore 镜像 ~1.27MB, 300 扇区不够)
+4. 构建产物请回传 wpk + **触发录音的方式**(测试命令/模式) —— 真麦验证需要
+   贵司产品工程里的麦克风/录音通路, 我方验证固件仅含 HIL golden 喂数
+5. 首个合入版建议**先打 0004**(上电自动跑 [SHIL] 40 窗自检, 与我方已验证的
+   ≤0.0001 直接对拍, 确认合入无误); 量产版去掉 0004 即纯产品启动
