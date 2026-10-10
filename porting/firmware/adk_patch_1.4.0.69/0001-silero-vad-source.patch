@@ -1,13 +1,11 @@
-# 0001-silero-vad-source.patch —— Silero VAD 全部源码/权重/头文件(新增文件, v3.2 终版)
-# v3.2(2026-10-11): 分块 conv1d 输出布局修复 —
-#   NNLib fmt0 输出行距=out_channels(块内 n=32)≠stft 行距 258, 直写 &stft[0][oc0] 会把
-#   8 帧输出全部叠进行 0(stft[1..7] 恒零 → p 衰减到 0, MM 包实测)。
-#   修复=每块先写连续 s_cout 再按行 memcpy 回 stft。
-# v3.1: kernel 32通道分块暂存(32KB 静态 TCM, 堆零占用, preset 216KB 可共存) +
-#   HIL 循环显式 wq_wdt_do_feed()
-# 继承 v3: conv1d 参数重排 [OC][KH=64][ICW=4] / dwconv5 内嵌 ReLU / 1x1/LSTM/decoder
-#   全标量 / HIL 音频 x32768 无损 / pw1x1 权重读一次
-# 验收基线: II/KK 实测 40 窗全部 |板端-PC|<=0.0001
+# 0001-silero-vad-source.patch —— Silero VAD 全部源码/权重/头文件(新增文件, v3.3)
+# v3.3(2026-10-11): 优化步骤1 — STFT 由 NNLib conv1d 改为 加窗256点基2FFT
+#   (basis[0]=窗/行j=w·cos/行129+j=-w·sin, PC验证结构5.7e-08/全40窗p偏差0;
+#    砍 528K MAC/窗 与 264KB/窗 kernel 流量, 32KB TCM 暂存与 6KB conv1d state 退役)
+# v3.2: 分块conv1d输出布局修复(s_cout暂存+按行拷回) — 已被 v3.3 FFT 取代
+# v3.1: HIL 显式 wq_wdt_do_feed()
+# 继承: conv1d 参数重排/dwconv5 内嵌 ReLU/全标量 1x1+LSTM+decoder/音频 x32768/pw1x1 读一次
+# 验收基线: II/KK/NN 实测 40 窗全部 |板端-PC|<=0.0001
 # 应用: patch -p0 < 0001-silero-vad-source.patch
 
 diff -ruN a/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h b/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h
@@ -22266,13 +22264,14 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_hil_audio.h b
 diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-adk/components/audio_algorithm/processor/src/silero_vad.c
 --- a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c	1970-01-01 08:00:00
 +++ b/wq-adk/components/audio_algorithm/processor/src/silero_vad.c	2026-10-11 00:00:00
-@@ -0,0 +1,384 @@
+@@ -0,0 +1,413 @@
 +/*
 + * silero_vad_nn.c —— Silero VAD v4 的 HiFi5 NNLib 加速实现(最终版)
 + * 与 silero_vad.c 同接口(sv_process/sv_reset/sv_last_prob + sv_state_t),可直接替换编译。
 + *
 + * 加速点(占计算量 ~97%):
-+ *   STFT(258x256,s64)        -> xa_nn_conv1d_std_f32   [~528K MAC/窗, 热点之首]
++ *   STFT(258x256,s64)        -> 加窗256点基2FFT(OO; basis[0]=窗/行j=cos/行129+j=-sin,
++ *   [PC验证40窗p偏差0]                     替代 conv1d: 砍528K MAC+264KB/窗kernel流量)
 + *   全部 1x1 卷积(proj/pw/s2) -> xa_nn_matmul_f32xf32_f32 (CHW 路径, 原生 [C][T] 布局)
 + *   LSTM 门(4x[64x64+64xIN])  -> xa_nn_matXvec_f32xf32_f32 (一次产出 256 行 = 4 门)
 + *   sigmoid/tanh              -> xa_nn_vec_sigmoid/tanh_f32_f32
@@ -22330,17 +22329,55 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +static int s_step_cnt = 0;
 +static float g_last_prob;
 +
-+/* conv1d 需要 bias 与 scratch 状态指针(NULL 会被参数检查拒绝) */
-+static const float s_zero_bias[258] = {0};
-+static long long s_conv1d_state[768] AL16;      /* conv1d state+cir_buf: 256*2*4+头+对齐+bus偏移≈2.1KB, 给6KB裕量(384B版本实测溢出挂死) */
++/* conv1d 已退役(OO): basis 行0=窗, 行j=w·cos(2πjk/256), 行129+j=-w·sin —— STFT
++   即加窗 256 点 rFFT, PC 验证 basis 结构精确到 5.7e-08 / FFT-vs-DFT 全 40 窗 p 偏差 0。
++   FFT 替代卷积: 砍 528K MAC/窗 与 264KB/窗 kernel 流量(NN 实测 STFT 78ms), 且不再占
++   32KB TCM 暂存与 6KB conv1d state。XA 头保留——步骤 2 LSTM 回 matXvec 时复用 */
 +
-+/* LL: STFT kernel 分块暂存 — 教训链: kernel 常驻 TCM 堆(KK, 264KB)会饿死音频 preset
-+   (preset_mem.c 需要 216KB 连续块, KK 实测 end 后 assert/exccause 0x15), 权重又只能
-+   在 data_xip(JJ: inst_xip 数据访问崩)。折中: 32 通道(32KB)静态 TCM 块, 每窗把 kernel
-+   从 flash 分 9 块流读一遍(264KB≈48ms@5.5MB/s), 堆零占用, NNLib 数学与 KK 逐位一致 */
-+#define SV_KCHUNK 32
-+static float s_kchunk[SV_KCHUNK * 256] AL16;
-+static float s_cout[8 * SV_KCHUNK] AL16;   /* 块输出暂存: conv1d fmt0 行距=out_channels(n)≠stft行距258, 必须先连续落盘再拷回 */
++/* ---- FFT: 窗 + 旋转因子(init 一次) + 工作区(static, 栈仅 2KB 不能放) ---- */
++#define SV_FFT_PI 3.14159265358979f
++static float s_win[256] AL16;                   /* = basis 行0 */
++static float s_cos[128] AL16, s_sin[128] AL16;  /* e^{-i2πj/256} = cos - i·sin */
++static int s_fft_ready;
++static float s_fre[256] AL16, s_fim[256] AL16;  /* 每帧工作区 */
++
++static void sv_fft_init(void)
++{
++    memcpy(s_win, sv_feature_extractor_forward_basis_buffer, sizeof(s_win));
++    for (int j = 0; j < 128; j++) {
++        s_cos[j] = cosf(2.0f * SV_FFT_PI * j / 256.0f);
++        s_sin[j] = sinf(2.0f * SV_FFT_PI * j / 256.0f);
++    }
++    s_fft_ready = 1;
++}
++
++/* 256 点基2 DIT 复FFT(含位反转), 约定 e^{-iθ} → 虚部 = -Σsin, 与 basis 一致 */
++static void sv_fft256(float *re, float *im)
++{
++    for (unsigned i = 1, j = 0; i < 256; i++) {
++        unsigned bit = 128;
++        for (; j & bit; bit >>= 1) j ^= bit;
++        j ^= bit;
++        if (i < j) {
++            float t = re[i]; re[i] = re[j]; re[j] = t;
++            t = im[i]; im[i] = im[j]; im[j] = t;
++        }
++    }
++    for (int len = 2; len <= 256; len <<= 1) {
++        int half = len >> 1, step = 256 / len;
++        for (int i = 0; i < 256; i += len) {
++            for (int k = 0; k < half; k++) {
++                float wr = s_cos[k * step], wi = -s_sin[k * step];
++                float xr = re[i + k + half], xi = im[i + k + half];
++                float vr = xr * wr - xi * wi;
++                float vi = xr * wi + xi * wr;
++                re[i + k] += vr;            im[i + k] += vi;
++                re[i + k + half] = re[i + k] - 2 * vr;
++                im[i + k + half] = im[i + k] - 2 * vi;
++            }
++        }
++    }
++}
 +
 +/* LSTM 合并偏置(Wb+Rb), 首次调用时生成 */
 +static float s_lstm_b1[256] AL16, s_lstm_b2[256] AL16;
@@ -22473,39 +22510,29 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +
 +    if (s_step_cnt <= 2)
 +        DBGLOG_INFO(0, "[SVs]1-preSTFT");
-+    /* ---------- 1. reflect(96,96) + STFT(8 帧) [热点 -> NNLib conv1d] ---------- */
-+    static float pad[704] AL16;          /* [704样本]=按[176平面][4样本]供 conv1d */
-+    static float stft[8][258] AL16;      /* conv1d fmt=0 输出 [out_H=8][OC=258] */
++    /* ---------- 1. reflect(96,96) + STFT(8 帧) [OO: FFT 替代 conv1d] ---------- */
++    static float pad[704] AL16;
++    static float stft[8][258] AL16;      /* [8帧][129实+129虚] */
 +    static float mag[129][8], lg[129][8];
 +
 +    for (int i = 0; i < 96; i++) pad[i] = x[96 - i];
 +    memcpy(pad + 96, x, sizeof(float) * 512);
 +    for (int i = 0; i < 96; i++) pad[608 + i] = x[510 - i];
 +
-+    /* NNLib conv1d 的 kernel 布局是 [OC][KH][ICW_pad], ICW_pad=PADDED_SIZE(IC*IW,4):
-+       若 IC=IW=1, 每个时间抽头占 4 槽位, kernel 按 [OC][256*4] 读 => 越界到后续权重区
-+       (GG 实锤: 结构性零通道 stft[*][129] 炸出同量级非零)。
-+       修复=重排为 [OC][KH=64平面][ICW=4]: kernel[oc][k=4*kh+j] 与 pad[样本] 内存布局
-+       一字节不动, 纯参数改动; cols=4*64=256=每通道抽头数, 无填充无越界, 数学严格等价
-+       out[t][oc] = Σ_k w[oc][k]·pad[64t+k] */
-+    /* 分块流读 kernel: 每块 32 通道, memcpy 进 TCM 后算该块全部 8 帧。
-+       注意: conv1d fmt0 输出行距=out_channels(n), 与 stft 行距 258 不同 —
-+       必须先写连续 s_cout 再按行拷回(LM 实测: 直写 &stft[0][oc0] 会把 8 帧全
-+       叠进行 0, stft[1..7] 恒零 → p 衰减到 0 的整轮报废) */
-+    {
-+        const float *kb = sv_feature_extractor_forward_basis_buffer;
-+        for (int oc0 = 0; oc0 < 258; ) {
-+            int n = 258 - oc0 < SV_KCHUNK ? 258 - oc0 : SV_KCHUNK;
-+            memcpy(s_kchunk, kb + (size_t)oc0 * 256, (size_t)n * 256 * sizeof(float));
-+            xa_nn_conv1d_std_f32(s_cout, pad, s_kchunk,
-+                                 (FLOAT32 *)(s_zero_bias + oc0),
-+                                 176 /*input_height=704/4 平面*/, 4 /*input_width*/,
-+                                 1 /*in_ch*/, 64 /*kernel_height*/, n /*out_channels*/,
-+                                 16 /*y_stride*/, 0 /*y_padding*/, 8 /*out_height*/,
-+                                 0 /*out_data_format*/, (VOID *)s_conv1d_state);
-+            for (int t = 0; t < 8; t++)
-+                memcpy(&stft[t][oc0], &s_cout[t * n], (size_t)n * sizeof(float));
-+            oc0 += n;
++    /* STFT = 加窗 rFFT: basis[0]=窗 w, basis[j]=w·cos, basis[129+j]=-w·sin
++       (PC 验证: 结构精确到 5.7e-08, 全 40 窗 p 与 direct DFT 偏差 0)。
++       每帧: y=pad·w → 256 点基2 FFT → stft[t][j]=Re, stft[t][129+j]=Im */
++    if (!s_fft_ready) sv_fft_init();
++    for (int t = 0; t < 8; t++) {
++        const float *fr = pad + t * 64;
++        for (int k = 0; k < 256; k++) {
++            s_fre[k] = fr[k] * s_win[k];
++            s_fim[k] = 0.0f;
++        }
++        sv_fft256(s_fre, s_fim);
++        for (int j = 0; j < 129; j++) {
++            stft[t][j] = s_fre[j];
++            stft[t][129 + j] = s_fim[j];
 +        }
 +    }
 +
