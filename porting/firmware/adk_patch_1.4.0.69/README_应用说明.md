@@ -1,15 +1,22 @@
 # Silero VAD → WQ7036AC ADK 1.4.0.69 补丁包(厂商 patch 交付版 v2)
 
-> 2026-10-09 v2(修正版): NNLib 加速版实现 + 钩子位置修正 + DBGLOG 输出。
-> 五个补丁 + 一条挪库指令 = Silero VAD 完整集成(NNLib 内核加速, 预期单窗 <5ms)。
+> 2026-10-11 v3(数值闭环终版): **II/KK 包实测 40 窗全部 |板端-PC|≤0.0001**(验收线 0.1),
+> 全窗 ~160ms(其中 STFT 8ms/KK)。五个补丁 + 一条挪库指令 = 完整集成。
 > 在 wq-audio_1.4.0.69 原始解包树上按编号顺序应用。
+>
+> **v3 相对 v2 的实质修正**(v2 有两个致错 bug, 不能用):
+> 1. conv1d kernel 布局: NNLib 实际按 [OC][ICW_pad×KH] 读 kernel, v2 直传 [OC][KH]
+>    导致 oc≥129 越界读权重区(GG 包结构性零通道实锤) → 参数重排 [OC][KH=64][ICW=4]
+> 2. dwconv5 补内嵌 ReLU: ONNX 每块 dw→ReLU→pw, v2 漏了 → 静音窗 p 偏高 ~0.3
+> 另: 1x1/残差/LSTM/decoder 全标量化(NNLib matmul 同款 HWC 布局坑)、sv_basis() TCM
+> 暂存 STFT kernel、HIL 音频 ×32768 无损量化、0002 增剥 vec_tanhf/vec_reluf
 
 ## 应用步骤
 
 ```bash
 # 在 wq-audio 源码根目录(含 wq-adk/ 与 wqcore/ 的那一层)执行:
 patch -p0 < 0001-silero-vad-source.patch         # Silero 源码+NNLib头(算法/权重/5函数封装/HIL/NNLib全套头)
-patch -p0 < 0002-rom-symbols-strip-recipsf2.patch # ROM 符号表剥离 __recipsf2(必打)
+patch -p0 < 0002-rom-symbols-strip.patch # ROM 符号表剥离 __recipsf2(必打)
 patch -p0 < 0003-defconfig-flash-layout.patch     # defconfig.silero + dcore 分区 300→400 扇区
 patch -p0 < 0004-hil-selftest-hook.patch          # [SHIL] 自检钩子(量产可不打)
 patch -p0 < 0005-nnlib-include-paths.patch        # SConscript 加 NNLib 头文件 -I 路径
@@ -34,17 +41,28 @@ scons --defconfig=config/7036AC/defconfig.silero && scons -j16
 
 | 补丁 | 内容 | 要点 |
 |---|---|---|
-| 0001 | Silero 源码 5 文件 + **NNLib 全套头文件**(nnlib/目录+NatureDSP/ndsp 头+state 头) | silero_vad.c 为 NNLib 映射版: STFT=conv1d_std_f32, 1x1卷积=matmul(CHW 路径), LSTM 门=matXvec, decoder=dot_prod, 激活=vec_sigmoid/tanh**_f32_f32**(32_32 是定点别用), dwconv5 保留标量; conv1d 必须给 bias(零数组)和 p_scratch; HIL 输出用 **DBGLOG**(printf 在 1.4 是空桩!), PACE 100ms 帧间 yield |
-| 0002 | rom_image.ld 删 `__recipsf2` 行(1.0/2.0 两版) | **必打**。xt-clang 的 float 除法引用它; ROM 地址从未被官方固件验证, 剥离后 libgcc 自带实现自动顶上(不要写 shim 返回 1.0f/x, 会撞 multiple definition) |
+| 0001 | Silero 源码 9 文件(算法/权重/5函数封装/HIL/音频头+自编激活源) + **NNLib 全套头文件**(47 个) | silero_vad.c v3: STFT=conv1d_std_f32(**参数重排 176/4/1/64/258/16/8**), 1x1/残差/LSTM/decoder **全标量**, dwconv5 **内嵌 ReLU**, pw1x1 权重读一次; sv_basis() 把 kernel 暂存 TCM 堆(带回退); conv1d 必须给 bias(零数组)和 p_scratch(≥2.1KB); HIL 输出用 **DBGLOG**(printf 在 1.4 是空桩!), PACE 100ms 帧间 yield |
+| 0002 | rom_image.ld 删 `__recipsf2`/`vec_tanhf`/`vec_reluf`(1.0 前者, 2.0 三者) | **必打**。ROM 地址从未被官方固件验证(实测 vec_tanhf 坏 SP 崩溃); 剥离后 libgcc/自编源自动顶上(不要写 shim 返回 1.0f/x, 会撞 multiple definition) |
 | 0003 | defconfig.silero + flash_layout dcore 300→400 | 总开关 CONFIG_VAD_ENABLE(自动 select AUDIO_VAD_ENABLE 等)+ RING_ALLOCATE_CFG=2(aud_sv_vad.c 硬性要求) |
 | 0004 | entry.c 挂 HIL 钩子 | **必须在 app_main_entry 之前**(它启动调度后不返回); 上电 [SHIL] 40 窗概率输出 |
 | 0005 | SConscript 加 `-I processor/inc` 和 `-I processor/inc/nnlib` | NNLib 头的内部互引需要两个路径 |
 
 ## 验证清单
 
-1. `xt-nm glass_dcore.elf | grep sv_process`(≈26 个)、`grep xa_nn`(NNLib 内核链接)
-2. `python3 validate_dcore.py <glass_dcore.bin>` 段链 PASS
-3. 上板: 三核正常 + 无 WDT2 崩溃 + `[SHIL]` 40 窗 → hil_parse.py ≤0.1 验收
+1. `xt-nm glass_dcore.elf | grep sv_process`(≈26 个)、`grep xa_nn_conv1d`(NNLib conv1d 链接)
+2. `python3 integration/validate_dcore.py <glass_dcore.bin>` 段链 PASS
+3. 上板: 三核正常 + 无 WDT2 崩溃 + `[SVs]7-done p=` 40 行
+4. `python3 integration/hil_parse.py <日志> golden_prob.f32` → **40 窗全部 ≤0.1**(实测 0.0001)
+
+## 性能基线(KK 实测, 供优化对照)
+
+| 阶段 | 耗时 | 说明 |
+|---|---|---|
+| STFT | **8ms** | kernel 264KB 已暂存 TCM 堆; 若回退 flash(data_xip) 为 400ms |
+| first_layer | ~42ms | 标量 pw1x1(已 k 外提); flash 读 50KB |
+| encoder | ~23ms | 同上 |
+| LSTM×2 | ~80ms | **下一个优化点**: W/R 256KB flash 流读; 可 TCM 暂存(堆余量不足, 需取舍) |
+| 全窗 | ~160ms | 40 窗 HIL 全程 12.8s(含 100ms 帧间 pacing), 不触发 WDT2 |
 
 ## 注意
 

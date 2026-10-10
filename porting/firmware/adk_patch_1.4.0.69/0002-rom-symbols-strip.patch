@@ -1,0 +1,42 @@
+# 0002-rom-symbols-strip.patch —— rom_image.ld 剥离 3 个危险符号(1.0/2.0 两版)
+# __recipsf2:  xt-clang float 除法引用; ROM 地址未被官方固件验证, 剥离后 libgcc 实现自动顶上
+# vec_tanhf / vec_reluf: 同理(ROM 版实测坏 SP 崩溃/结果不可靠; 全标量实现后无引用, 剥离防复发)
+# 应用: patch -p0 < 0002-rom-symbols-strip.patch
+diff -ruN wqcore/chipset/soc/hornet/rom_syms/1.0/xt/rom_image.ld wqcore/chipset/soc/hornet/rom_syms/1.0/xt/rom_image.ld
+--- wqcore/chipset/soc/hornet/rom_syms/1.0/xt/rom_image.ld	1970-01-01 08:00:00
++++ wqcore/chipset/soc/hornet/rom_syms/1.0/xt/rom_image.ld	2026-10-11 00:00:00
+@@ -328,7 +328,6 @@
+ __floatsidf = 0x2615f868;
+ __floatundidf = 0x2615f8a0;
+ __floatdidf = 0x2615f8b4;
+-__recipsf2 = 0x2615f940;
+ __divsf3 = 0x2615f980;
+ __mulsi3 = 0x2615fa38;
+ __umodsi3 = 0x2615fad0;
+diff -ruN wqcore/chipset/soc/hornet/rom_syms/2.0/xt/rom_image.ld wqcore/chipset/soc/hornet/rom_syms/2.0/xt/rom_image.ld
+--- wqcore/chipset/soc/hornet/rom_syms/2.0/xt/rom_image.ld	1970-01-01 08:00:00
++++ wqcore/chipset/soc/hornet/rom_syms/2.0/xt/rom_image.ld	2026-10-11 00:00:00
+@@ -176,7 +176,6 @@
+ bqriirf_df1 = 0x261371b0;
+ scl_sqrt64x32 = 0x26138d20;
+ scl_rsqrt32x32_exp = 0x26138e90;
+-vec_tanhf = 0x26139020;
+ scl_powf = 0x2613a280;
+ vec_tanf = 0x2613a9c0;
+ scl_tanhf = 0x2613ba30;
+@@ -320,7 +319,6 @@
+ bqriirf_df1_init = 0x2615bb50;
+ vec_float2int = 0x2615bcc0;
+ vec_int2float = 0x2615c010;
+-vec_reluf = 0x2615c3e0;
+ vec_addf = 0x2615c640;
+ vec_int16_to_int32 = 0x2615c880;
+ vec_int32_to_int16 = 0x2615c900;
+@@ -364,7 +362,6 @@
+ __floatsidf = 0x2615f228;
+ __floatundidf = 0x2615f260;
+ __floatdidf = 0x2615f274;
+-__recipsf2 = 0x2615f300;
+ __divsf3 = 0x2615f340;
+ __mulsi3 = 0x2615f3f8;
+ __umodsi3 = 0x2615f490;
