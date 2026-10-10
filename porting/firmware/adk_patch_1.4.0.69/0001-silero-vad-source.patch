@@ -1,11 +1,11 @@
-# 0001-silero-vad-source.patch —— Silero VAD 全部源码/权重/头文件(新增文件, v3.3)
-# v3.3(2026-10-11): 优化步骤1 — STFT 由 NNLib conv1d 改为 加窗256点基2FFT
-#   (basis[0]=窗/行j=w·cos/行129+j=-w·sin, PC验证结构5.7e-08/全40窗p偏差0;
-#    砍 528K MAC/窗 与 264KB/窗 kernel 流量, 32KB TCM 暂存与 6KB conv1d state 退役)
-# v3.2: 分块conv1d输出布局修复(s_cout暂存+按行拷回) — 已被 v3.3 FFT 取代
-# v3.1: HIL 显式 wq_wdt_do_feed()
-# 继承: conv1d 参数重排/dwconv5 内嵌 ReLU/全标量 1x1+LSTM+decoder/音频 x32768/pw1x1 读一次
-# 验收基线: II/KK/NN 实测 40 窗全部 |板端-PC|<=0.0001
+# 0001-silero-vad-source.patch —— Silero VAD 全部源码/权重/头文件(新增文件, v3.4 终版)
+# v3.4(2026-10-11): 三步优化完成(232→96.7ms, 40窗全程≤0.0001) —
+#   1) STFT=加窗256点基2FFT(替代 conv1d, 砍 528K MAC+264KB/窗流量)
+#   2) LSTM 门=matXvec SIMD 一次调用 + R 暂存 TCM(W 留 flash, PSRAM 实测≈flash 无意义)
+#   3) 1x1 卷积=matmul SIMD(输入[T][IC]/输出[T][OC] 前后转置)
+#   继承: dwconv5 内嵌 ReLU / res_relu 标量 / HIL 显式喂狗 / 音频 x32768 / matXvec+matmul
+#   布局均按 XNNC 源码定案(GG/CC/DD 时代教训)
+# <32ms 最后一公里: 需 preset 重配释放 ~140KB TCM(LSTM W+first/enc 权重暂存), 厂商动作
 # 应用: patch -p0 < 0001-silero-vad-source.patch
 
 diff -ruN a/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h b/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h
@@ -22264,7 +22264,7 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_hil_audio.h b
 diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-adk/components/audio_algorithm/processor/src/silero_vad.c
 --- a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c	1970-01-01 08:00:00
 +++ b/wq-adk/components/audio_algorithm/processor/src/silero_vad.c	2026-10-11 00:00:00
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,438 @@
 +/*
 + * silero_vad_nn.c —— Silero VAD v4 的 HiFi5 NNLib 加速实现(最终版)
 + * 与 silero_vad.c 同接口(sv_process/sv_reset/sv_last_prob + sv_state_t),可直接替换编译。
@@ -22297,6 +22297,7 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +#include <math.h>
 +#include "silero_vad.h"
 +#include "silero_vad_consts.h"
++#include "wq_heap.h"
 +#include "xa_type_def.h"                     /* WORD32/FLOAT32/VOID 基础类型 */
 +#include "nnlib/xa_nnlib_kernels_api.h"
 +#include "audio_alg_dbglog.h"  /* Y调试: 逐内核阶段埋点 */
@@ -22412,26 +22413,31 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +        }
 +}
 +
-+/* ---- 1x1 卷积(标量, 参考版已验证): in[IC][T] -> out[OC][T], relu 可选 ----
-+   NNLib matmul 实测期望 [T][IC](HWC)输入(源码 line 91: p_vec=p_vec1+vec*cols1),
-+   我们的数据是 [IC][T](CHW) — 布局反了, 非零输入时输出垃圾(CC包dump实证 act0全零).
-+   标量版先保数值正确。JJ: k 循环外提 — 权重每元素只读一次(此前每 t 重读整行,
-+   XIP 流量×8); 每个 out 元素的加法仍按 k 升序, 数值与旧版逐位一致 */
++/* ---- 1x1 卷积(RR: NNLib matmul SIMD, 签名与标量版一致, 9 个调用点自动切换) ----
++   布局(源码定案): 输入须 [T][IC](vec 偏移=vec_offset=IC), 权重 [OC][IC] 原样,
++   输出 [T][OC](out_offset=OC, out_stride=1)。我们的数据是 [IC][T] —— 前后各转置一次
++   (scratch 合计 10KB)。matmul 求和序与标量不同, 数值由 HIL 40 窗对拍兜底。
++   速度: 210K MAC/窗 SIMD ~2MAC/cycle → 计算亚毫秒; 权重 flash 流量 75KB≈14ms 为主
++   (权重 TCM 暂存因 preset 余量不足暂缓, 见指南) */
++static float s_in_t[258 * 8] AL16;   /* 输入转置区 [T][IC], 最大 258×8 */
++static float s_out_t[64 * 8] AL16;   /* 输出转置区 [T][OC], 最大 64×8 */
++
 +static void pw1x1(const float *w, const float *b, const float *in, int IC, int OC,
 +                  int T, float *out, int relu)
 +{
-+    for (int c = 0; c < OC; c++) {
-+        float acc[8];                      /* 调用点 T 最大 8 */
-+        for (int t = 0; t < T; t++) acc[t] = b[c];
-+        const float *wr = w + (size_t)c * IC;
-+        for (int k = 0; k < IC; k++) {
-+            float wk = wr[k];
-+            const float *xr = in + (size_t)k * T;
-+            for (int t = 0; t < T; t++) acc[t] += wk * xr[t];
++    for (int t = 0; t < T; t++)
++        for (int k = 0; k < IC; k++)
++            s_in_t[t * IC + k] = in[(size_t)k * T + t];
++
++    xa_nn_matmul_f32xf32_f32(s_out_t, w, s_in_t, b, OC, IC, IC,
++                             T /*vec_count*/, IC /*vec_offset*/,
++                             OC /*out_offset*/, 1 /*out_stride*/);
++
++    for (int t = 0; t < T; t++)
++        for (int c = 0; c < OC; c++) {
++            float v = s_out_t[t * OC + c];
++            out[(size_t)c * T + t] = relu ? (v > 0.0f ? v : 0.0f) : v;
 +        }
-+        for (int t = 0; t < T; t++)
-+            out[(size_t)c * T + t] = relu ? (acc[t] > 0.0f ? acc[t] : 0.0f) : acc[t];
-+    }
 +}
 +
 +/* ---- 1x1 卷积 stride2(标量): 每通道抽偶数列 ---- */
@@ -22459,24 +22465,16 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +    }
 +}
 +
-+/* ---- LSTM 单步(NNLib): W[256][IN], R[256][64], 门序 i,o,f,c ---- */
++/* ---- LSTM 单步: 门计算回 matXvec(PP/EE/FF 三包证与标量逐位一致):
++   gates = W·x + R·h + bsum 一次调用(SIMD ~2MAC/cycle); 门激活仍标量 ---- */
 +static void lstm_step_nn(const float *W, const float *R, const float *bsum,
 +                         const float *x, float *h, float *c, int IN)
 +{
-+    /* 标量版: matXvec 非零输入可靠性未证(EE实测 p 系统性偏高指向此处), 先保数值
-+       NNLib版(零输入正确): gates[r] = W[r][0..IN-1]·x + R[r][0..63]·h + bsum[r] */
 +    float gates[256] AL16;
 +    float act[3][64] AL16;
 +    float tg[64] AL16, tc[64] AL16;
 +
-+    for (int r = 0; r < 256; r++) {
-+        float acc = bsum[r];
-+        const float *wr = W + (size_t)r * IN;
-+        const float *rr = R + (size_t)r * 64;
-+        for (int k = 0; k < IN; k++) acc += wr[k] * x[k];
-+        for (int k = 0; k < 64; k++) acc += rr[k] * h[k];
-+        gates[r] = acc;
-+    }
++    xa_nn_matXvec_f32xf32_f32(gates, W, R, x, h, bsum, 256, IN, 64, IN, 64);
 +
 +    for (int j = 0; j < 64; j++) {
 +        act[0][j] = 1.0f / (1.0f + expf(-gates[j]));           /* i */
@@ -22492,6 +22490,30 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +        tc[j] = tanhf(c[j]);
 +        h[j] = act[1][j] * tc[j];
 +    }
++}
++
++/* ---- 步骤2(修正): 只暂存 R(2×64KB)→TCM堆; W 永远留 flash ----
++   PP 教训: HIL 在 preset 之前跑, W→PSRAM(128KB) 后 preset block0(216KB) 装不下
++   → preset_mem 断言复活(KK 同款)。预算核过: 只占 TCM 128KB 时, HIL 路径
++   TCM 剩 160KB > preset 需 72KB 且 PSRAM 全空, 量产路径 preset 先占后 TCM 剩
++   216KB——两条路径都活。W 暂存等 preset 重配(厂商)释放内存后再议 */
++#define SV_LSTM_MATSZ (256 * 64 * (int)sizeof(float))   /* 64KB/矩阵 */
++static float *s_r_stg[2];                /* NULL=未暂存, 用 flash 原指针 */
++static const float *s_w_src[2], *s_r_src[2];
++static int s_stg_done;
++
++static void sv_lstm_stage(void)
++{
++    if (s_stg_done) return;
++    s_stg_done = 1;
++    s_w_src[0] = sv_LSTM_398;  s_r_src[0] = sv_LSTM_399;
++    s_w_src[1] = sv_LSTM_418;  s_r_src[1] = sv_LSTM_419;
++    for (int l = 0; l < 2; l++) {
++        s_r_stg[l] = wq_heap_caps_malloc(SV_LSTM_MATSZ, MALLOC_CAP_POS_TCM);
++        if (s_r_stg[l]) memcpy(s_r_stg[l], s_r_src[l], SV_LSTM_MATSZ);
++    }
++    DBGLOG_INFO(0, "[SVstg] r=[%d,%d]",
++                s_r_stg[0] != 0, s_r_stg[1] != 0);
 +}
 +
 +void sv_reset(sv_state_t *st)
@@ -22652,14 +22674,17 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +        DBGLOG_INFO(0, "[SVs]5-preLSTM");
 +    /* ---------- 5. LSTM x2 (每窗 1 帧) ---------- */
 +    float y1[64] AL16, y2[64] AL16;
-+    lstm_step_nn(sv_LSTM_398, sv_LSTM_399, s_lstm_b1,
++    sv_lstm_stage();
++    lstm_step_nn(s_w_src[0],
++                 s_r_stg[0] ? s_r_stg[0] : s_r_src[0], s_lstm_b1,
 +                 e6[0], st->lstm_h[0], st->lstm_c[0], 64);
 +    memcpy(y1, st->lstm_h[0], sizeof(y1));
 +    if (s_step_cnt <= 2)
 +        DBGLOG_INFO(0, "[CC]y1(L1h): %d %d %d %d",
 +                    (int)(y1[0]*100000), (int)(y1[1]*100000),
 +                    (int)(y1[32]*100000), (int)(y1[63]*100000));
-+    lstm_step_nn(sv_LSTM_418, sv_LSTM_419, s_lstm_b2,
++    lstm_step_nn(s_w_src[1],
++                 s_r_stg[1] ? s_r_stg[1] : s_r_src[1], s_lstm_b2,
 +                 y1, st->lstm_h[1], st->lstm_c[1], 64);
 +    memcpy(y2, st->lstm_h[1], sizeof(y2));
 +    if (s_step_cnt <= 2)
