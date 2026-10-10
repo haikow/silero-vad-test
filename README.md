@@ -9,6 +9,7 @@
 
 | 入口 | 内容 |
 |---|---|
+| [porting/firmware/快速上手.md](porting/firmware/快速上手.md) | **⭐ 接手从这里开始**:环境基线/开发循环/坑速查/待办 |
 | [porting/firmware/移植指南.md](porting/firmware/移植指南.md) | 全程记录 §1-42(基线/工具链/逐包调试/三步优化) |
 | [porting/firmware/踩坑总结.md](porting/firmware/踩坑总结.md) | 六类坑(基线/工具链/license/打包/调试/数值) |
 | [porting/firmware/adk_patch_1.4.0.69/](porting/firmware/adk_patch_1.4.0.69/README_应用说明.md) | **厂商交付 patch 包 v3.4**(应用步骤/接口契约/验收) |
