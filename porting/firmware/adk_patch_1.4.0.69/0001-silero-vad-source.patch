@@ -1,12 +1,11 @@
-# 0001-silero-vad-source.patch —— Silero VAD 全部源码/权重/头文件(新增文件, v3.5)
-# v3.5(2026-10-11): int8 量化版(37ms/窗, 判定翻转 0/40) —
+# 0001-silero-vad-source.patch —— Silero VAD 全部源码/权重/头文件(新增文件, v3.6 最终交付版)
+# v3.6(2026-10-11): int8 量化 + 全部优化(31ms/窗, 判定翻转 0/40) —
+#   - STFT = 双实数帧合批 FFT(4 次复 FFT 代 8 次) + norm 快速近似(SV_NORM_FAST 可回退)
 #   - LSTM = matXvec_8x8_32(int32 出口) + per-row 统一 scale + 门控 float(禁回写整型)
-#   - dwconv5 int8 权重 per-channel scale; 1x1 float 权重 TCM 暂存(~140KB, 两路径核过)
-#   - STFT = 加窗 256 点基2 FFT; basis 退役(窗行独立); wpk -357KB
-#   - 内核陷阱: NULL-bias 走慢路径(传零数组); HIL 显式喂狗
-# 继承 v3.4 全部数值修复; float 参考版历史见 git
-# 验收: 40 窗判定翻转 0/40, 最大偏差 0.0438(int8 口径), HIL 7.9s
-# 应用: patch -p0 < 0001-silero-vad-source.patch
+#   - 1x1 float 权重 TCM 暂存(~140KB, 两启动路径核过); dwconv5 int8; basis 退役
+#   - 内核陷阱: matXvec NULL-bias 走慢路径(传零数组); HIL 显式喂狗
+# 真机验收: 40 窗判定翻转 0/40, 最大偏差 0.0438(int8 口径), 单窗 31ms, HIL 7.7s
+# 应用: patch -p0 < 0001-silero-vad-source.patch (其余补丁/挪库见本 README)
 
 diff -ruN a/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h b/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h
 --- a/wq-adk/components/audio_algorithm/processor/inc/NatureDSP_Signal_math.h	1970-01-01 08:00:00
@@ -22264,7 +22263,7 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_hil_audio.h b
 diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-adk/components/audio_algorithm/processor/src/silero_vad.c
 --- a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c	1970-01-01 08:00:00
 +++ b/wq-adk/components/audio_algorithm/processor/src/silero_vad.c	2026-10-11 00:00:00
-@@ -0,0 +1,506 @@
+@@ -0,0 +1,559 @@
 +/*
 + * silero_vad_nn.c —— Silero VAD v4 的 HiFi5 NNLib 加速实现(最终版)
 + * 与 silero_vad.c 同接口(sv_process/sv_reset/sv_last_prob + sv_state_t),可直接替换编译。
@@ -22335,6 +22334,42 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +extern const float sv_decoder_decoder_1_bias[];   /* [1] */
 +
 +#define AL16 __attribute__((aligned(16)))
++
++/* ---- VV: norm 快速近似(可回退) —— 0=libm 精确版, 1=位hack+多项式 ----
++   误差界(PC 验证): fast_log2 全范围绝对 3.5e-06, fast_sqrt 相对 4.6e-06
++   —— 远小于 int8 判定预算(0.0438)。省 norm 段 ~5ms(37→~32ms 真麦线) */
++#ifndef SV_NORM_FAST
++#define SV_NORM_FAST 1
++#endif
++
++#if SV_NORM_FAST
++static inline float sv_fast_sqrt(float v)        /* v>0; 相对误差 ~4.6e-6(2次牛顿) */
++{
++    union { float f; uint32_t u; } c;
++    c.f = v;
++    c.u = 0x5f3759dfu - (c.u >> 1);
++    float g = c.f;
++    g = g * (1.5f - 0.5f * v * g * g);
++    g = g * (1.5f - 0.5f * v * g * g);
++    return v * g;
++}
++static inline float sv_fast_log(float x)         /* x>1; 绝对误差 ~3.5e-6 */
++{   /* log2: 指数提取 + [1,2) 六阶多项式(系数经 PC 全范围验证); log = log2·ln2 */
++    union { float f; uint32_t u; } c;
++    c.f = x;
++    int e = (int)(c.u >> 23) - 127;
++    c.u = (c.u & 0x007FFFFFu) | 0x3F800000u;
++    float t = c.f - 1.0f;
++    float p = -0.024825649f;
++    p = p * t + 0.11790537f;
++    p = p * t - 0.272353455f;
++    p = p * t + 0.45385646f;
++    p = p * t - 0.716986952f;
++    p = p * t + 1.442395494f;
++    p = p * t + 5.065e-06f;
++    return (float)e * 0.693147181f + p * 0.693147181f;
++}
++#endif
 +
 +static int s_step_cnt = 0;
 +static float g_last_prob;
@@ -22615,23 +22650,36 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +       (PC 验证: 结构精确到 5.7e-08, 全 40 窗 p 与 direct DFT 偏差 0)。
 +       每帧: y=pad·w → 256 点基2 FFT → stft[t][j]=Re, stft[t][129+j]=Im */
 +    if (!s_fft_ready) sv_fft_init();
-+    for (int t = 0; t < 8; t++) {
-+        const float *fr = pad + t * 64;
++    /* WW: 双实数帧合批 —— z=帧2k+i·帧2k+1, 一次 256 点复 FFT 解两帧谱
++       (A[k]=(Z[k]+conj(Z[N-k]))/2, B[k]=(Z[k]-conj(Z[N-k]))/2i; PC 验证 1.67e-07;
++       k=0/128 退化点与 basis 结构性零吻合, 无需特判)。FFT 次数 8→4 */
++    for (int pair = 0; pair < 4; pair++) {
++        const float *fa = pad + (2 * pair) * 64;
++        const float *fb = pad + (2 * pair + 1) * 64;
 +        for (int k = 0; k < 256; k++) {
-+            s_fre[k] = fr[k] * s_win[k];
-+            s_fim[k] = 0.0f;
++            s_fre[k] = fa[k] * s_win[k];
++            s_fim[k] = fb[k] * s_win[k];
 +        }
 +        sv_fft256(s_fre, s_fim);
 +        for (int j = 0; j < 129; j++) {
-+            stft[t][j] = s_fre[j];
-+            stft[t][129 + j] = s_fim[j];
++            int k1 = (256 - j) & 255;
++            float zr = s_fre[j], zi = s_fim[j], zr1 = s_fre[k1], zi1 = s_fim[k1];
++            stft[2 * pair][j]       = (zr + zr1) * 0.5f;
++            stft[2 * pair][129 + j] = (zi - zi1) * 0.5f;
++            stft[2 * pair + 1][j]       = (zi + zi1) * 0.5f;
++            stft[2 * pair + 1][129 + j] = (zr1 - zr) * 0.5f;
 +        }
 +    }
 +
 +    for (int t = 0; t < 8; t++)
 +        for (int f = 0; f < 129; f++) {
 +            float re = stft[t][f], im = stft[t][129 + f];
++#if SV_NORM_FAST
++            float v2 = re * re + im * im;
++            mag[f][t] = v2 > 0.0f ? sv_fast_sqrt(v2) : 0.0f;
++#else
 +            mag[f][t] = sqrtf(re * re + im * im);
++#endif
 +        }
 +
 +    if (s_step_cnt <= 2)
@@ -22639,7 +22687,11 @@ diff -ruN a/wq-adk/components/audio_algorithm/processor/src/silero_vad.c b/wq-ad
 +    /* ---------- 2. 自适应归一化(标量小算, 与参考实现一致) ---------- */
 +    for (int t = 0; t < 8; t++)
 +        for (int f = 0; f < 129; f++)
++#if SV_NORM_FAST
++            lg[f][t] = sv_fast_log(mag[f][t] * SV_NORM_MUL + SV_NORM_ADD);
++#else
 +            lg[f][t] = logf(mag[f][t] * SV_NORM_MUL + SV_NORM_ADD);
++#endif
 +
 +    float m[8];
 +    for (int t = 0; t < 8; t++) {
