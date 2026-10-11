@@ -51,6 +51,7 @@ def lstmf(wn, rn, bn, x, h, c):
 fb = g("feature_extractor.forward_basis_buffer").reshape(258, 256)
 filt = g("adaptive_normalization.filter_").flatten()
 e6rng = [np.inf, -np.inf]; hrng = [np.inf, -np.inf]
+A16 = {}   # 1x1 int16 激活标定: 张量名 -> [lo,hi]
 h1 = c1 = h2 = c2 = np.zeros(64, np.float32)
 for wI in range(40):
     x = X[wI]
@@ -87,6 +88,11 @@ for wI in range(40):
     w3 = pw1x1f("encoder.11.0.pw_conv.0.weight", "encoder.11.0.pw_conv.0.bias", d3, 32, 64, 1, 0)
     act3 = np.maximum(w3 + pj3, 0)
     e6 = np.maximum(g("onnx::Conv_358").reshape(64, 64) @ act3 + g("onnx::Conv_359")[:, None], 0)
+    for nm, v in [("feat", feat), ("dwt", dwt), ("act0", act0), ("e0", e0),
+                  ("d1", d1), ("act1", act1), ("e2", e2), ("d2", d2),
+                  ("act2", act2), ("e4", e4), ("d3", d3), ("act3", act3)]:
+        lo, hi = A16.setdefault(nm, [np.inf, -np.inf])
+        A16[nm] = [min(lo, float(np.min(v))), max(hi, float(np.max(v)))]
     e6rng[0] = min(e6rng[0], float(e6.min())); e6rng[1] = max(e6rng[1], float(e6.max()))
     h1o, c1 = lstmf("onnx::LSTM_398", "onnx::LSTM_399", "onnx::LSTM_400", e6[:, 0], h1, c1)
     h2o, c2 = lstmf("onnx::LSTM_418", "onnx::LSTM_419", "onnx::LSTM_420", h1o, h2, c2)
@@ -155,5 +161,31 @@ with open(OUT, "w") as f:
     f.write(cflt("sv_win", win) + "\n")
     f.write(f"const float svq_s_x = {S_X:.8g}f;\n")
     f.write(f"const float svq_s_h = {S_H:.8g}f;\n")
+
+    # ---- 1x1 层 int8 权重(per-row) + int16 激活 scale(XX 包: matXvec_8x16_32) ----
+    f.write("/* ---- 1x1 层 int8(XX): out[c][t]=acc32[c]*sw[c]*s16 + b[c]; "
+            "mat2=零列技巧(cols2=1) ---- */\n")
+    P1 = {"p1": ("first_layer.0.proj.weight", 16), "w1": ("first_layer.0.pw_conv.0.weight", 16),
+          "c349": ("onnx::Conv_349", 16), "ep1": ("encoder.3.0.proj.weight", 32),
+          "ew1": ("encoder.3.0.pw_conv.0.weight", 32), "c352": ("onnx::Conv_352", 32),
+          "ew2": ("encoder.7.0.pw_conv.0.weight", 32), "c355": ("onnx::Conv_355", 32),
+          "ep3": ("encoder.11.0.proj.weight", 64), "ew3": ("encoder.11.0.pw_conv.0.weight", 64),
+          "c358": ("onnx::Conv_358", 64)}
+    tot1x1 = 0
+    for nm, (k, rows) in P1.items():
+        w2d = g(k).reshape(rows, -1)
+        s_w = 1.05 * w2d.max(axis=1) / 127.0; s_w[s_w == 0] = 1e-12
+        q = np.clip(np.round(w2d / s_w[:, None]), -127, 127).astype(np.int8)
+        tot1x1 += q.nbytes
+        f.write(carr(f"svq1_{nm}", q, "int8_t") + "\n")
+        f.write(cflt(f"svq1_{nm}_sc", s_w) + "\n")
+    for nm in ["feat", "dwt", "act0", "e0", "d1", "act1", "e2", "d2",
+               "act2", "e4", "d3", "act3"]:
+        lo, hi = A16[nm]
+        s16 = max(abs(lo), abs(hi)) * 1.05 / 32767.0 or 1e-9
+        f.write(f"const float svq1_s_{nm.replace('.', '_')} = {s16:.8g}f;\n")
+    f.write("const int8_t svq1_zmat8[64] = {0};\n")     # 零 mat2([rows×1])
+    f.write("const int16_t svq1_zvec16[1] = {0};\n")   # 零 vec2
+    print(f"1x1 int8 权重: {tot1x1/1024:.1f}KB")
 tot = (W1q.nbytes + R1q.nbytes + W2q.nbytes + R2q.nbytes + sum(q.nbytes for q, _ in DW.values()))
 print(f"已生成 {OUT}: int8 权重 {tot/1024:.1f}KB + scales + 窗 1KB")
