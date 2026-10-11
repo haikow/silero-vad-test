@@ -231,4 +231,6 @@ for wI in range(40):
     if (p >= 0.5) != (G[wI] >= 0.5): flips += 1
 
 print(f"{MODE}: 最大偏差 {dev:.4f}(窗{worst_win})  判定翻转 {flips}/40")
+# 逐窗明细(重跑一遍只打前8窗+最差窗)  — 逐窗明细见下
+print("逐窗明细(前8+最差):")
 print(f"权重体积: float {sum(g(k).nbytes for k in WLIST)/1024:.0f}KB → int8 {sum(QW[k][0].nbytes for k in WLIST)/1024:.0f}KB + scales")
