@@ -1,5 +1,15 @@
 # Silero VAD 仓库总览
 
+## 分支地图（2026-10-16 起，固件工作分两条线）
+
+| 分支 | 定位 | 入口 |
+|---|---|---|
+| `main`（本分支） | **1.4.0.69 老基线开发线**：自家 glass-stereo-dac 台架的移植/优化/验收工具 + 厂商交付 patch | `porting/firmware/快速上手.md` |
+| `demo-board` | **厂商 demo 板线**：AI_Record_BT_base(ChuangQi DemoBroad) 工程的 Silero 集成，overlay+一键还原+Docker 编译指南+固件包变更史 | `demo-board/README.md`，编译看其 `docs/编译指南.md` |
+
+两条线的 Silero 核心代码已按平台分叉（demo 板版含 DFS 持有/录音态降载），改动各自分支内进行，
+通用修复用 cherry-pick 同步；PC 测试工具与文档两分支共享。
+
 本仓库现在包含两大部分:
 
 ## 一、固件移植(WQ7036AC)—— ✅ 数值验收收官(2026-10-11)
