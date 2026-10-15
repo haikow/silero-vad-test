@@ -1,0 +1,140 @@
+import os
+import sys
+
+from wq_tools import *
+from wq_environment import *
+
+Import('env')
+
+cwd = Dir('.').srcnode().abspath
+name = os.path.dirname(cwd)
+
+build_series = env.GetWqOption('CONFIG_BUILD_SERIES')
+chip_ver = env.GetWqOption('CONFIG_CHIP_VERSION_STR')
+
+#compatable with SDK1.0
+core = env.GetWqOption('CORE')
+if not core:
+    core = env.GetWqOption('CONFIG_BUILD_CORE')
+
+libname = 'audio_alg'
+
+pub_inc = []
+pri_inc = []
+src_dir = []
+alg_lib = []
+
+flags = []
+
+if 'CUS_PATH' in env and 'algo_lib_path' in env['CUS_PATH']:
+    algo_lib_path = env['CUS_PATH']['algo_lib_path']
+    if algo_lib_path is None or algo_lib_path == '':
+        lib_path = cwd
+    else:
+        lib_path = algo_lib_path
+else:
+    lib_path=cwd
+
+if core == 'dcore' :
+    #lib
+    lib_dir_list = os.listdir(os.path.join(lib_path, 'lib'))
+    
+    enc_lib_list = ['wq_enc_4_0', 'wq_enc_3_0', 'wq_enc']
+    if env.GetWqOption('CONFIG_ENABLE_ENC_4_0'):
+        enc_lib = 'wq_enc_4_0'
+    elif env.GetWqOption('CONFIG_ENABLE_ENC_3_0'):
+        enc_lib = 'wq_enc_3_0'
+    else :
+        enc_lib = 'wq_enc'
+    for lib in enc_lib_list:
+        if enc_lib != lib and lib in lib_dir_list:
+            lib_dir_list.remove(lib)
+
+    if ((not env.GetWqOption('CONFIG_CODEC_LC3_DEC_ENABLE')) and env.GetWqOption('CONFIG_CODEC_LC3_ENC_ENABLE')):
+        lib_dir_list.remove('lc3_codec')
+        lib_dir_list.remove('lc3_dec')
+    elif ((not env.GetWqOption('CONFIG_CODEC_LC3_ENC_ENABLE')) and env.GetWqOption('CONFIG_CODEC_LC3_DEC_ENABLE')):
+        lib_dir_list.remove('lc3_codec')
+        lib_dir_list.remove('lc3_enc')
+    elif env.GetWqOption('CONFIG_CODEC_LC3_ENC_ENABLE') and env.GetWqOption('CONFIG_CODEC_LC3_DEC_ENABLE'):
+        lib_dir_list.remove('lc3_enc')
+        lib_dir_list.remove('lc3_dec')
+    else :
+        lib_dir_list.remove('lc3_codec')
+        lib_dir_list.remove('lc3_enc')
+        lib_dir_list.remove('lc3_dec')
+
+    if env.GetWqOption('CONFIG_APP_VAD_KWS_ALWAYS_OFF') and 'wq_kws' in lib_dir_list:
+        # KWS is optional in the VAD pipeline. Keep kws_pre for record-base
+        # preprocessing, but do not link the keyword model library.
+        lib_dir_list.remove('wq_kws')
+
+    if env.GetWqOption('CONFIG_OPUS_ENC_ONLY'):
+        lib_dir_list.remove('opus_codec')
+        lib_dir_list.remove('opus_dec')
+    elif env.GetWqOption('CONFIG_OPUS_DEC_ONLY'):
+        lib_dir_list.remove('opus_codec')
+        lib_dir_list.remove('opus_enc')
+    else :
+        lib_dir_list.remove('opus_enc')
+        lib_dir_list.remove('opus_dec')
+
+    if env.GetWqOption('CONFIG_WIND_DETECT_3_0_ENABLE'):
+        lib_dir_list.remove('wq_anc_wnd_det')
+    else:
+        lib_dir_list.remove('wq_anc_wnd_det_3_0')
+        
+    if env.GetWqOption('CONFIG_MUSIC_PLC_HIGH_PERFORMANCE'):
+        lib_dir_list.remove('wq_music_plc')
+    else:
+        lib_dir_list.remove('wq_music_plc2')
+        
+    if build_series == "hornet" and chip_ver == "2.0":
+        lib_dir_list.remove('ldac')
+    else:
+        lib_dir_list.remove('ldac_v2')
+
+    for d in lib_dir_list:
+        if '.git' in d:
+            continue
+        if os.path.isdir(os.path.join(lib_path, 'lib', d)):
+            pub_inc.append(os.path.join(lib_path, 'lib', d, 'inc'))
+            if build_series == "scarab" and chip_ver == "2.0" and d == "aac_dec":
+                alg_lib.append(os.path.join('lib', d, 'lib' + d + '_glblz.a'))
+            else :
+                alg_lib.append(os.path.join('lib', d, 'lib' + d + '.a'))
+    #inc
+    pub_inc.append(os.path.join(cwd, 'processor', 'inc'))
+    # Silero VAD: NNLib 头(含 nnlib/ 内部互引) + NatureDSP/ndsp 头
+    flags += ['-I' + os.path.join(cwd, 'processor', 'inc'),
+              '-I' + os.path.join(cwd, 'processor', 'inc', 'nnlib')]
+    pub_inc.append(cwd)
+
+    #src
+    src_dir.extend(Glob(os.path.join('processor', 'src', '*.c')))
+    if env.GetWqOption('CONFIG_APP_VAD_KWS_ALWAYS_OFF'):
+        src_dir = [
+            src for src in src_dir
+            if not str(src).endswith(os.path.join('src', 'kws.c'))
+            and not str(src).endswith(os.path.join('src', 'kws_weight.c'))
+        ]
+    if env.GetWqOption('CONFIG_OPUS_ENC_ONLY'):
+        src_dir = [
+            src for src in src_dir if not str(src).endswith(os.path.join('src', 'opus_decoder.c'))
+        ]
+
+else:
+    #case1 : inc all lib inc
+    #lib inc path for all core to use struct or define val
+    # for d in os.listdir(os.path.join(cwd, 'lib')):
+    #     if os.path.isdir(os.path.join(cwd, 'lib', d)):
+    #         pub_inc.append(os.path.join(cwd, 'lib', d, 'inc'))
+
+    #case2 : just inc com inc path
+    lib_com_path = ['wq_common', 'wq_aanc_common','wq_aanc_ada_eq', 'wq_aanc_env_adaptive_anc', 'wq_aanc_env_noise_det', 'wq_aanc_fit_test', 'wq_aanc_leak_anc', 'wq_aanc_leak_eq', 'wq_aanc_tone_det', 'wq_anc_wnd_det', 'wq_med', 'wq_howl_det', 'wq_aanc_env_monitor']
+    for dir in lib_com_path :
+        pub_inc.append(os.path.join(lib_path, 'lib', dir,'inc'))
+
+mod = env.WQModule(name=libname, src = src_dir, pub_inc = pub_inc, libs=alg_lib, flags = flags, iswalibs=True)
+
+Return(['mod'])
