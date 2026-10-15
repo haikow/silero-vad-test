@@ -55,6 +55,13 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
             hd->acc_n = 0;      /* 无重叠: 下一窗从零攒 */
         }
     }
+    /* 契约: 上层 sw_vad.c 的迟滞按"连续调用"计数(continue_hit_cnt=10),
+       要求每次调用都回报当前命中态; 推理仍按 512 采样窗执行, 此处把最近
+       一窗的判定平摊到两次窗完成之间的每一帧返回。仅窗完成帧返回会导致
+       连续 1 最多 2 次(320 帧/512 窗), cb(1) 永不触发 → 录音无法启动 */
+    if (hd->windows > 0 && hit == 0 && hd->last_prob >= WQ_SILERO_THRESHOLD) {
+        hit = 1;
+    }
     return hit;
 }
 
