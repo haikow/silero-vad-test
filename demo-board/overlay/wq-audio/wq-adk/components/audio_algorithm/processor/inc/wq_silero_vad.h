@@ -31,9 +31,8 @@ typedef struct {
     int acc_n;
     float last_prob;        /* 最近完成窗口的人声概率 */
     unsigned int windows;   /* 已完成窗口计数 */
-    unsigned char rec_phase;    /* 录音态: 命中后置 1, 期间按 REC_SKIP 降载推理 */
+    unsigned char rec_phase;    /* 录音态: 命中后置 1, 降载持续到本流实例销毁(不退出, 见 wq_silero_vad.c 注释) */
     unsigned char skip_cnt;     /* 录音态内的跳窗计数 */
-    unsigned short silent_run;  /* 录音态内连续静音受评窗数(退出录音态用) */
 } wq_silero_hd_t;
 
 /* 调试/标定: 最近一窗的人声概率(0~1), 用于 HIL 逐窗比对 */

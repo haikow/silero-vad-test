@@ -9,16 +9,17 @@
 
 #define WQ_SILERO_ACC 512
 
-/* ---- 录音态降载(2026-10-15, WDT2 修复) ----
+/* ---- 录音态降载(2026-10-15, WDT2 修复; 2026-10-16 v6 修正) ----
  * 实测(17:43 日志): 本地录音并发 opus 编码时窗完成率仅 62%(19.5/s vs 实时 31.25/s),
  * 全速 Silero(31ms/窗 ≈ 97% 实时预算) + opus + 管线 → dcore 超支, 30s 后 WDT2 咬死
- * (原厂轻量 VAD <1ms/窗 无此问题)。策略: 首次命中(=本地录音即将启动)后进"录音态",
- * 每 REC_SKIP 窗推理 1 窗(成本 1/3, 端点粒度 96ms 仍远快于厂商 200ms 确认定时器);
- * 连续 SIL_EXIT 个受评窗低于 SIL_P(≈2s 纯静音)视为录音已停, 恢复全速等下一次候选。
- * 监测/候选阶段(无 opus 并发)保持全速, 不牺牲首响时延 */
-#define WQ_SILERO_REC_SKIP 3
-#define WQ_SILERO_SIL_EXIT 64
-#define WQ_SILERO_SIL_P    0.10f
+ * (原厂轻量 VAD <1ms/窗 无此问题)。
+ * v5 教训: 曾用"2s 静音退出降载"——但说话句间停顿常超 2s, 录音中途退回全速又超支,
+ * 板验(10-16 日志)录音期 run too long 44ms×146 次, 吞吐贴地 1.0×无余量。
+ * v6 定案: **命中后降载持续整个流实例生命周期, 不再退出**。每个 TVAD 候选窗都是新
+ * 实例(wq_sw_vad_init 清零 hd→全速), 首响时延不受影响; 命中后的录音/监测期一律
+ * 每 REC_SKIP 窗推理 1 窗, 端点判定粒度 192ms 仍可接受(厂商停录判定 700ms)。
+ * REC_SKIP=6: Silero 均摊 3.2ms/帧 + opus ~5ms + 管线 ≈ 11ms < 20ms 预算, 留 45% 余量 */
+#define WQ_SILERO_REC_SKIP 6
 
 /* demo 板 DFS 降频修复: 厂商 demo 电源管理会把 dcore 降到 16/32MHz,
    Silero 需 192M 才能实时(31ms/窗)。init 时申请 192M 并持有(不释放);
@@ -69,7 +70,9 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
         n -= take;
 
         if (hd->acc_n == WQ_SILERO_ACC) {
-            /* 录音态降载: 每 REC_SKIP 窗才推理 1 窗, 跳过的窗沿用上一窗判定 */
+            /* 录音态降载: 命中后每 REC_SKIP 窗才推理 1 窗, 跳过的窗沿用上一窗判定。
+               不设退出条件(v5 教训: 句间停顿>2s 退出降载→录音中途回全速→超支)。
+               降载随 hd 生命周期结束——下一候选窗是新实例, 自动恢复全速保首响 */
             int infer = 1;
             if (hd->rec_phase && hd->skip_cnt < (WQ_SILERO_REC_SKIP - 1)) {
                 infer = 0;
@@ -87,11 +90,6 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
                 if (hd->last_prob >= WQ_SILERO_THRESHOLD) {
                     hit = 1;
                     hd->rec_phase = 1;          /* 命中=录音将启动, 进降载态 */
-                    hd->silent_run = 0;
-                } else if (hd->rec_phase) {
-                    if (hd->last_prob < WQ_SILERO_SIL_P &&
-                        ++hd->silent_run >= WQ_SILERO_SIL_EXIT)
-                        hd->rec_phase = 0;      /* ≈2s 纯静音, 恢复全速 */
                 }
             }
             hd->acc_n = 0;      /* 无重叠: 下一窗从零攒 */
