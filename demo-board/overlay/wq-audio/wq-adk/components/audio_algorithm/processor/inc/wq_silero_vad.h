@@ -22,6 +22,7 @@ int   wq_get_sw_vad_hd_size(void);
 int   wq_get_sw_vad_scratch_size(void);
 void *wq_sw_vad_init(void *vad_hd, void *pscratch);
 int   wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len);
+void  wq_sw_vad_exit(void);   /* v7 会话级功耗: 流销毁时释放 192M DFS(见 sw_vad_remove) */
 void  wq_get_sw_vad_lib_version(char *version_string);
 
 /* 句柄结构(供测试/调试读取; 固件侧按 void* 使用) */
@@ -33,6 +34,7 @@ typedef struct {
     unsigned int windows;   /* 已完成窗口计数 */
     unsigned char rec_phase;    /* 录音态: 命中后置 1, 降载持续到本流实例销毁(不退出, 见 wq_silero_vad.c 注释) */
     unsigned char skip_cnt;     /* 录音态内的跳窗计数 */
+    float noise_floor;          /* v7 自适应跳窗: RMS 噪声底 EMA(静音 1/6, 活跃 1/3) */
 } wq_silero_hd_t;
 
 /* 调试/标定: 最近一窗的人声概率(0~1), 用于 HIL 逐窗比对 */
