@@ -35,6 +35,9 @@ typedef struct {
     unsigned char rec_phase;    /* 录音态: 命中后置 1, 降载持续到本流实例销毁(不退出, 见 wq_silero_vad.c 注释) */
     unsigned char skip_cnt;     /* 录音态内的跳窗计数 */
     float noise_floor;          /* v7 自适应跳窗: RMS 噪声底 EMA(静音 1/6, 活跃 1/3) */
+    int   pk_rms;               /* v8 瞬态否决: rms 峰值(rms×1e5) */
+    unsigned char pk_age;       /* v8: 峰后窗龄(≤2 窗内骤降 20×=吹气/碰撞) */
+    signed char veto_cnt;       /* v8: 瞬态否戒倒计数窗 */
 } wq_silero_hd_t;
 
 /* 调试/标定: 最近一窗的人声概率(0~1), 用于 HIL 逐窗比对 */

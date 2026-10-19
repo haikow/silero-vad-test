@@ -27,9 +27,24 @@
  * 静音期 3.2ms/帧, 余量更大 */
 #define WQ_SILERO_SKIP_QUIET 6
 #define WQ_SILERO_SKIP_ACTIVE 3
-#define WQ_SILERO_NF_UP 0.05f    /* 噪声底 EMA 上升系数 */
+#define WQ_SILERO_NF_UP 0.02f    /* 噪声底 EMA 上升系数(v8: 0.05→0.02, 说话首窗勿顶高底噪) */
 #define WQ_SILERO_NF_DN 0.005f   /* 下降系数(慢降, 防语音把底噪顶高) */
 #define WQ_SILERO_NF_RATIO 2.5f  /* 活跃判定: RMS > 2.5×噪声底 */
+
+/* ---- v8 双门限 + 瞬态否决(2026-10-19, 板上 [SVf] 数据驱动) ----
+ * 问题1(轻声延迟 2.5-3.3s): p 爬升后在 0.5 单阈值附近震荡(0.55/0.49/0.81/0.48),
+ *   每次跌破 0.5 厂商"连续 10 帧确认"清零重凑 → 迟迟凑不满。
+ *   修: 双门限——进入用 0.5(误触发不升), 进入后维持用 0.35(p 已确立是人声,
+ *   音节间隙/尾音的轻微回落不清零迟滞)。
+ * 问题2(大力吹气触发): rms 脉冲骤降指纹(81021→412 降197×, 37148→236 降157×;
+ *   正常说话 rms 平稳, 峰后降幅 <5×)。修: rms>8000 的峰窗后 2 窗内骤降 20×
+ *   → 判气流/碰撞瞬态, 否决随后 4 窗(128ms)的命中。大声喊 rms 持续高无骤降,
+ *   不误杀; 万一误杀也只延迟 128ms 照常触发。 */
+#define WQ_SILERO_TH_ENTER 0.50f
+#define WQ_SILERO_TH_HOLD  0.35f
+#define WQ_SILERO_PK_RMS   8000    /* 瞬态判定: rms 峰阈值(万分之一单位) */
+#define WQ_SILERO_PK_DROP  20      /* 峰后 2 窗内降到 峰/20 以下 = 骤降 */
+#define WQ_SILERO_VETO_WIN 4       /* 瞬态后否决窗数(128ms) */
 
 /* demo 板 DFS 降频修复: 厂商 demo 电源管理会把 dcore 降到 16/32MHz,
    Silero 需 192M 才能实时(31ms/窗)。v7 起改会话级: init 时申请 192M,
@@ -102,6 +117,28 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
             int active = rms > (hd->noise_floor * WQ_SILERO_NF_RATIO);
             int skip = active ? WQ_SILERO_SKIP_ACTIVE : WQ_SILERO_SKIP_QUIET;
 
+            /* v8: 瞬态(吹气/碰撞)否决——rms 峰后骤降指纹。峰窗记峰, 后 2 窗内
+               掉到峰/20 以下 → 否决随后 4 窗(气流脉冲把 p 顶出的尖峰不算数) */
+            int rms_i = (int)(rms * 100000);
+            if (rms_i > WQ_SILERO_PK_RMS) {
+                hd->pk_rms = rms_i;
+                hd->pk_age = 0;
+            } else if (hd->pk_rms > WQ_SILERO_PK_RMS) {
+                hd->pk_age++;
+                if (hd->pk_age <= 2 && rms_i * WQ_SILERO_PK_DROP < hd->pk_rms) {
+                    if (hd->veto_cnt < WQ_SILERO_VETO_WIN)
+                        hd->veto_cnt = WQ_SILERO_VETO_WIN;
+                    hd->pk_rms = 0;         /* 峰已消费 */
+                }
+                if (hd->pk_age > 2) hd->pk_rms = 0;
+            }
+            if (hd->veto_cnt > 0) hd->veto_cnt--;
+            int veto = hd->veto_cnt > 0;
+
+            /* v8 双门限: 进入 0.5(误触发不升); rec_phase 后维持 0.35(音节间隙
+               轻微回落不清零厂商迟滞——轻声贴线震荡 3.3s 的根因) */
+            float thr = hd->rec_phase ? WQ_SILERO_TH_HOLD : WQ_SILERO_TH_ENTER;
+
             /* 录音态降载: 命中后按档位跳窗, 跳过的窗沿用上一窗判定。
                不设退出条件(v5 教训); 降载随 hd 生命周期结束——下一候选窗
                是新实例, 自动恢复全速保首响。v7 自适应: 静音 1/6 省预算,
@@ -120,7 +157,7 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
                 hd->last_prob = sv_process(&hd->sv, hd->acc);
 #endif
                 hd->windows++;
-                if (hd->last_prob >= WQ_SILERO_THRESHOLD) {
+                if (!veto && hd->last_prob >= thr) {
                     hit = 1;
                     hd->rec_phase = 1;          /* 命中=录音将启动, 进降载态 */
                 }
@@ -130,11 +167,11 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
             {
                 static int s_feat_cnt;
                 static int s_feat_hit = -1;
-                int now_hit = (hd->last_prob >= WQ_SILERO_THRESHOLD);
+                int now_hit = (hd->last_prob >= thr);
                 if (now_hit != s_feat_hit || (s_feat_cnt++ & 31) == 0) {
-                    DBGLOG_INFO(0, "[SVf] p=%d rms=%d nf=%d skip=%d\n",
+                    DBGLOG_INFO(0, "[SVf] p=%d rms=%d nf=%d skip=%d v=%d\n",
                                 (int)(hd->last_prob * 10000),
-                                (int)(rms * 100000), (int)(hd->noise_floor * 100000), skip);
+                                rms_i, (int)(hd->noise_floor * 100000), skip, veto);
                     s_feat_hit = now_hit;
                 }
             }
@@ -144,9 +181,14 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
     /* 契约: 上层 sw_vad.c 的迟滞按"连续调用"计数(continue_hit_cnt=10),
        要求每次调用都回报当前命中态; 推理仍按 512 采样窗执行, 此处把最近
        一窗的判定平摊到两次窗完成之间的每一帧返回。仅窗完成帧返回会导致
-       连续 1 最多 2 次(320 帧/512 窗), cb(1) 永不触发 → 录音无法启动 */
-    if (hd->windows > 0 && hit == 0 && hd->last_prob >= WQ_SILERO_THRESHOLD) {
-        hit = 1;
+       连续 1 最多 2 次(320 帧/512 窗), cb(1) 永不触发 → 录音无法启动。
+       v8: 平摊判定同用双门限 + 瞬态否决 */
+    {
+        float thr = hd->rec_phase ? WQ_SILERO_TH_HOLD : WQ_SILERO_TH_ENTER;
+        if (hd->windows > 0 && hit == 0 && hd->veto_cnt == 0 &&
+            hd->last_prob >= thr) {
+            hit = 1;
+        }
     }
     return hit;
 }
