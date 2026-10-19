@@ -40,7 +40,7 @@
  *   正常说话 rms 平稳, 峰后降幅 <5×)。修: rms>8000 的峰窗后 2 窗内骤降 20×
  *   → 判气流/碰撞瞬态, 否决随后 4 窗(128ms)的命中。大声喊 rms 持续高无骤降,
  *   不误杀; 万一误杀也只延迟 128ms 照常触发。 */
-#define WQ_SILERO_TH_ENTER 0.50f
+#define WQ_SILERO_TH_ENTER 0.45f
 #define WQ_SILERO_TH_HOLD  0.35f
 #define WQ_SILERO_PK_RMS   8000    /* 瞬态判定: rms 峰阈值(万分之一单位) */
 #define WQ_SILERO_PK_DROP  20      /* 峰后 2 窗内降到 峰/20 以下 = 骤降 */
