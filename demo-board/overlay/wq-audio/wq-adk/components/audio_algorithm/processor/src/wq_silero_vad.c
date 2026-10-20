@@ -45,6 +45,7 @@
 #define WQ_SILERO_PK_RMS   8000    /* 瞬态判定: rms 峰阈值(万分之一单位) */
 #define WQ_SILERO_PK_DROP  20      /* 峰后 2 窗内降到 峰/20 以下 = 骤降 */
 #define WQ_SILERO_VETO_WIN 4       /* 瞬态后否决窗数(128ms) */
+#define WQ_SILERO_QUIET_N 12        /* v10 能量停录: 连续安静窗数(~380ms)后无视p尾巴 */
 
 /* demo 板 DFS 降频修复: 厂商 demo 电源管理会把 dcore 降到 16/32MHz,
    Silero 需 192M 才能实时(31ms/窗)。v7 起改会话级: init 时申请 192M,
@@ -134,6 +135,26 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
             }
             if (hd->veto_cnt > 0) hd->veto_cnt--;
             int veto = hd->veto_cnt > 0;
+
+            /* v10 能量门控停录: 修"没人声也一直录"。实测(10-19 18:20 日志)
+               25% 窗口 rms<500(能量已静) 但 p≥0.35(Silero 衰减尾巴/环境持续声
+               把保持线托住) → 厂商 35 帧停录凑不齐。能量是更快的静音指示器:
+               录音态下连续 QUIET_N 窗 rms 低于 min(1.6×底噪, 绝对门限) → 无视
+               模型尾巴, last_prob 归零, 停录计数立即开始累计。真语音 rms 通常
+               >2×底噪, 不会误停; 音乐 rms 高, 不属于"安静", 不受影响 */
+            if (hd->rec_phase) {
+                float nf_i = hd->noise_floor * 100000.0f;
+                float quiet_thr = (nf_i * 1.6f < 600.0f) ? (nf_i * 1.6f) : 600.0f;
+                if ((float)rms_i < quiet_thr) {
+                    if (hd->quiet_cnt < 255) hd->quiet_cnt++;
+                } else {
+                    hd->quiet_cnt = 0;
+                }
+                if (hd->quiet_cnt >= WQ_SILERO_QUIET_N)
+                    hd->last_prob = 0.0f;
+            } else {
+                hd->quiet_cnt = 0;
+            }
 
             /* v8 双门限: 进入 0.5(误触发不升); rec_phase 后维持 0.35(音节间隙
                轻微回落不清零厂商迟滞——轻声贴线震荡 3.3s 的根因) */

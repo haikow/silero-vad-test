@@ -38,6 +38,7 @@ typedef struct {
     int   pk_rms;               /* v8 瞬态否决: rms 峰值(rms×1e5) */
     unsigned char pk_age;       /* v8: 峰后窗龄(≤2 窗内骤降 20×=吹气/碰撞) */
     signed char veto_cnt;       /* v8: 瞬态否戒倒计数窗 */
+    unsigned char quiet_cnt;    /* v10 能量停录: 连续安静窗计数 */
 } wq_silero_hd_t;
 
 /* 调试/标定: 最近一窗的人声概率(0~1), 用于 HIL 逐窗比对 */
