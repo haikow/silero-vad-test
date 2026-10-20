@@ -49,11 +49,14 @@
 #define WQ_SILERO_CAP_WIN 3750      /* v11 录音硬顶: 连续无安静间隙窗数(3750×32ms=120s) */
 
 /* demo 板 DFS 降频修复: 厂商 demo 电源管理会把 dcore 降到 16/32MHz,
-   Silero 需 192M 才能实时(31ms/窗)。v7 起改会话级: init 时申请 192M,
-   流销毁时由上层 sw_vad.c 调 wq_sw_vad_exit() 释放——空闲回到厂商
-   原生 DFS(TVAD 硬件常开微安级), 只有候选窗/录音期上 192M。
-   安全性: 录音流(含 opus)有自己的 DFS floor(64M)请求, 释放我们的
-   192M 不会饿着 opus(DFS 引用计数各自独立) */
+   Silero 需 192M 才能实时(31ms/窗)。
+   v11b 回退永久持有(v7 会话级被 10-20 14:50 日志证伪): 候选窗每次超时
+   都销毁/重建流, exit→释放 192M→重建→再申请的间隙里 dcore 掉到 64M
+   甚至 16M(日志 5×"set to 32/32/64"+1×"16/16/16"), 若恰逢录音/媒体
+   流并发, Silero 每窗 93-372ms → 124 条 run too long → WDT2 崩在
+   xa_nn_matmul_f32。流生命周期 ≠ 会话生命周期, 释放粒度太细。
+   永久持有的功耗代价(空闲 ~百 mA 级)先接受, 灵敏度/稳定性优先;
+   功耗版待做"延迟释放防抖"或与厂商对齐流生命周期后再上 */
 static dfs_object_t *s_dfs_obj;
 
 static void sv_dfs_hold(void)
@@ -64,10 +67,7 @@ static void sv_dfs_hold(void)
 
 void wq_sw_vad_exit(void)
 {
-    if (s_dfs_obj) {
-        dfs_release(s_dfs_obj);
-        s_dfs_obj = NULL;
-    }
+    /* v11b: 不再释放——见上方注释。保留空函数(swid sw_vad.c 调用点不动) */
 }
 
 int wq_get_sw_vad_hd_size(void)
