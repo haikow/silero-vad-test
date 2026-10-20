@@ -46,6 +46,7 @@
 #define WQ_SILERO_PK_DROP  20      /* 峰后 2 窗内降到 峰/20 以下 = 骤降 */
 #define WQ_SILERO_VETO_WIN 4       /* 瞬态后否决窗数(128ms) */
 #define WQ_SILERO_QUIET_N 12        /* v10 能量停录: 连续安静窗数(~380ms)后无视p尾巴 */
+#define WQ_SILERO_CAP_WIN 3750      /* v11 录音硬顶: 连续无安静间隙窗数(3750×32ms=120s) */
 
 /* demo 板 DFS 降频修复: 厂商 demo 电源管理会把 dcore 降到 16/32MHz,
    Silero 需 192M 才能实时(31ms/窗)。v7 起改会话级: init 时申请 192M,
@@ -136,12 +137,13 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
             if (hd->veto_cnt > 0) hd->veto_cnt--;
             int veto = hd->veto_cnt > 0;
 
-            /* v10 能量门控停录: 修"没人声也一直录"。实测(10-19 18:20 日志)
-               25% 窗口 rms<500(能量已静) 但 p≥0.35(Silero 衰减尾巴/环境持续声
-               把保持线托住) → 厂商 35 帧停录凑不齐。能量是更快的静音指示器:
-               录音态下连续 QUIET_N 窗 rms 低于 min(1.6×底噪, 绝对门限) → 无视
-               模型尾巴, last_prob 归零, 停录计数立即开始累计。真语音 rms 通常
-               >2×底噪, 不会误停; 音乐 rms 高, 不属于"安静", 不受影响 */
+            /* v10 能量门控停录(v11 修正执行顺序): 修"没人声也一直录"。
+               实测(10-19 18:20 日志) 25% 窗口 rms<500(能量已静) 但 p≥0.35
+               (Silero 衰减尾巴/环境持续声把保持线托住) → 厂商 35 帧停录凑不齐。
+               v10 教训(10-20 14:50 日志): 归零写在 infer 前, 被 sv_process
+               输出覆盖 → 门控从未生效 → 音乐场景录音停不了 → 音乐解码+opus+
+               Silero 三重负载 24s 持续超支 → WDT2 崩在 xa_nn_matmul_f32。
+               v11: 计数在 infer 前累计(每窗都算), 归零移到 infer 之后覆盖。 */
             if (hd->rec_phase) {
                 float nf_i = hd->noise_floor * 100000.0f;
                 float quiet_thr = (nf_i * 1.6f < 600.0f) ? (nf_i * 1.6f) : 600.0f;
@@ -150,11 +152,24 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
                 } else {
                     hd->quiet_cnt = 0;
                 }
-                if (hd->quiet_cnt >= WQ_SILERO_QUIET_N)
-                    hd->last_prob = 0.0f;
             } else {
                 hd->quiet_cnt = 0;
             }
+            int quiet_kill = hd->rec_phase && hd->quiet_cnt >= WQ_SILERO_QUIET_N;
+
+            /* v11 录音硬顶保底: 音乐场景 rms 高(能量门控不触发)+Silero 判音乐
+               p 0.5-0.9(停录凑不齐)→录音无限拖长→音乐解码+opus+Silero 三重
+               负载持续超支→WDT2(10-20 14:50 日志 rec6, 124 条 run too long
+               后崩在 xa_nn_matmul_f32)。任何连续 120s 无一次 380ms 安静间隙
+               的"语音"(只有音乐/持续声做得到)强制判停, 并在下次安静前不再
+               重新命中——同时阻断音乐反复触发录音的循环。正常人声 120s 内
+               必有句间安静, 最坏代价是把超长独白切成两段 */
+            if (!quiet_kill) {
+                if (hd->nosil_cnt < 60000) hd->nosil_cnt++;
+            } else {
+                hd->nosil_cnt = 0;
+            }
+            int cap_kill = hd->rec_phase && hd->nosil_cnt > WQ_SILERO_CAP_WIN;
 
             /* v8 双门限: 进入 0.5(误触发不升); rec_phase 后维持 0.35(音节间隙
                轻微回落不清零厂商迟滞——轻声贴线震荡 3.3s 的根因) */
@@ -177,6 +192,11 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
 #else
                 hd->last_prob = sv_process(&hd->sv, hd->acc);
 #endif
+                /* v11: 能量门控在推理之后覆盖(v10 顺序 bug 修正)——
+                   连续安静窗数达标后, 无论模型尾巴输出什么都判静音;
+                   120s 无安静间隙硬顶(音乐场景)同理强制判停 */
+                if (quiet_kill || cap_kill)
+                    hd->last_prob = 0.0f;
                 hd->windows++;
                 if (!veto && hd->last_prob >= thr) {
                     hit = 1;
