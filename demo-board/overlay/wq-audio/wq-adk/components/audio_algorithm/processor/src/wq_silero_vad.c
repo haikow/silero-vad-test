@@ -47,6 +47,7 @@
 #define WQ_SILERO_VETO_WIN 4       /* 瞬态后否决窗数(128ms) */
 #define WQ_SILERO_QUIET_N 12        /* v10 能量停录: 连续安静窗数(~380ms)后无视p尾巴 */
 #define WQ_SILERO_CAP_WIN 3750      /* v11 录音硬顶: 连续无安静间隙窗数(3750×32ms=120s) */
+#define WQ_SILERO_AVOID_N 10       /* v12 启动避让: 命中后跳推理窗数(320ms), 躲冷读+opus+提示音三重叠加 */
 
 /* demo 板 DFS 降频修复: 厂商 demo 电源管理会把 dcore 降到 16/32MHz,
    Silero 需 192M 才能实时(31ms/窗)。
@@ -186,6 +187,18 @@ int wq_sw_vad_process(void *vad_hd, char *in_data, unsigned int in_len)
             } else {
                 hd->skip_cnt = 0;
             }
+            /* v12 录音启动避让: 录音启动瞬间 = Silero 首窗权重冷读(实测
+               126ms) + opus 编码器初始化 + 录音提示音解码(stream_music,
+               用户未放音乐也会出现) 三重叠加, 单窗可到 100ms+ → mirror
+               process too slow → acore 池溢出断言(10-20 15:21 日志 rec#3
+               启动 1.8s 即崩)。命中后前 AVOID_N 窗完全跳过推理, last_prob
+               维持命中值(返回 hit=1, 录音状态不受影响——厂商停录判定需
+               700ms unhit, 320ms 避让不会误停), 让 opus/提示音先独占 CPU
+               进入稳态; 避让结束后 Silero 恢复(此时冷读已完成) */
+            if (hd->rec_phase && hd->rec_win_cnt < WQ_SILERO_AVOID_N) {
+                infer = 0;
+            }
+            if (hd->rec_phase && hd->rec_win_cnt < 60000) hd->rec_win_cnt++;
             if (infer) {
 #if SILERO_STUB
                 hd->last_prob = 0.0f;   /* stub: 不推理, 概率恒 0 */
